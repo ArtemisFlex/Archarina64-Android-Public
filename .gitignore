@@ -1,0 +1,11 @@
+**/bin/
+**/obj/
+artifacts/
+.vs/
+*.apk
+*.aab
+*.keystore
+*.pfx
+*.z64
+*.v64
+*.n64
