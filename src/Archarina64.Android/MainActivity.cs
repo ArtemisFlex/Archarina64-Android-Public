@@ -113,6 +113,8 @@ public sealed class MainActivity : Activity
         rightPanel = new LinearLayout(this) { Orientation = Orientation.Vertical };
         rightPanel.SetBackgroundColor(Color.Rgb(25, 33, 44));
         rightPanel.SetPadding(Dp(8), Dp(6), Dp(8), Dp(6));
+        inspector = new TextView(this) { Text = "Open a ROM to inspect scenes, rooms, actors, collision, and geometry.", TextSize = 13 };
+        inspector.SetTextColor(Color.White); inspector.SetPadding(Dp(6), Dp(8), Dp(6), Dp(12));
         var rightHeader = new LinearLayout(this) { Orientation = Orientation.Horizontal };
         var toolTitle = new TextView(this) { Text = "Inspector & tools", TextSize = 17, Gravity = GravityFlags.CenterVertical };
         toolTitle.SetTextColor(Color.Rgb(88, 222, 189)); rightHeader.AddView(toolTitle, new LinearLayout.LayoutParams(0, Dp(44), 1));
