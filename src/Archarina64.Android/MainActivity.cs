@@ -24,10 +24,12 @@ public sealed class MainActivity : Activity
     private ListView rooms = null!;
     private ListView sceneList = null!, nativeRoomList = null!;
     private LinearLayout leftPanel = null!, rightPanel = null!, editorChrome = null!;
+    private LinearLayout rightToolContent = null!;
     private TextView sceneTitle = null!, roomTitle = null!, documentTitle = null!;
     private Button restoreChrome = null!;
     private int selectedSceneId = -1, selectedRoomId = -1;
     private bool leftPanelVisible = true, rightPanelVisible;
+    private string leftTab = "ROM", rightTab = "General";
     private LinearLayout pageRoot = null!;
     private readonly List<View> chromeViews = [];
     private Button fullscreenToggle = null!;
@@ -90,6 +92,11 @@ public sealed class MainActivity : Activity
         sceneTitle.SetTextColor(Color.Rgb(88, 222, 189)); leftHeader.AddView(sceneTitle, new LinearLayout.LayoutParams(0, Dp(44), 1));
         leftHeader.AddView(CompactButton("×", () => SetLeftPanel(false)), new LinearLayout.LayoutParams(Dp(44), Dp(44)));
         leftPanel.AddView(leftHeader);
+        var leftTabs = new HorizontalScrollView(this) { HorizontalScrollBarEnabled = false };
+        var leftTabRow = new LinearLayout(this) { Orientation = Orientation.Horizontal };
+        AddTabButton(leftTabRow, "ROM scenes", () => SetLeftTab("ROM"));
+        AddTabButton(leftTabRow, "Layout", () => SetLeftTab("Layout"));
+        leftTabs.AddView(leftTabRow); leftPanel.AddView(leftTabs, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, Dp(44)));
         sceneList = new ListView(this) { ChoiceMode = ChoiceMode.Single };
         sceneList.ItemClick += (_, e) => { var current = romWorkspace?.Document ?? rom; if (current is not null && e.Position < current.Scenes.Count) OpenSceneInViewport(current.Scenes[e.Position]); };
         leftPanel.AddView(sceneList, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, 0, 1));
@@ -110,20 +117,12 @@ public sealed class MainActivity : Activity
         toolTitle.SetTextColor(Color.Rgb(88, 222, 189)); rightHeader.AddView(toolTitle, new LinearLayout.LayoutParams(0, Dp(44), 1));
         rightHeader.AddView(CompactButton("×", () => SetRightPanel(false)), new LinearLayout.LayoutParams(Dp(44), Dp(44)));
         rightPanel.AddView(rightHeader);
-        var toolScroll = new ScrollView(this); var toolContent = new LinearLayout(this) { Orientation = Orientation.Vertical };
-        inspector = new TextView(this) { TextSize = 13 }; inspector.SetTextColor(Color.White); inspector.SetPadding(Dp(6), Dp(8), Dp(6), Dp(12)); toolContent.AddView(inspector);
-        AddPanelButton(toolContent, "Scene properties", () => WithScene(ShowRomScene));
-        AddPanelButton(toolContent, "Room properties", () => WithRoom(ShowRomRoom));
-        AddPanelButton(toolContent, "Actors & objects", () => WithRoom(ShowRomRoom));
-        AddPanelButton(toolContent, "Show/hide actor gizmos", ToggleActorGizmos);
-        AddPanelButton(toolContent, "Collision & cameras", () => WithScene(ShowRomCollisionVertices));
-        AddPanelButton(toolContent, "Geometry & materials", () => WithRoom(ShowRomGeometryVertices));
-        AddPanelButton(toolContent, "Scene commands", () => WithScene(ShowRomSceneCommands));
-        AddPanelButton(toolContent, "Gameplay", Gameplay);
-        AddPanelButton(toolContent, "Verify ROM", VerifyEditedRom);
-        AddPanelButton(toolContent, "Export ROM", ExportEditedRom);
-        AddPanelButton(toolContent, "Import tile", () => Pick(ImportTile));
-        toolScroll.AddView(toolContent); rightPanel.AddView(toolScroll, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, 0, 1));
+        var rightTabs = new HorizontalScrollView(this) { HorizontalScrollBarEnabled = false };
+        var rightTabRow = new LinearLayout(this) { Orientation = Orientation.Horizontal };
+        foreach (string tab in new[] { "General", "Scene", "Room", "Actors", "Collision", "Geometry", "Commands", "Tools" })
+            AddTabButton(rightTabRow, tab, () => SetRightTab(tab));
+        rightTabs.AddView(rightTabRow); rightPanel.AddView(rightTabs, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, Dp(44)));
+        var toolScroll = new ScrollView(this); rightToolContent = new LinearLayout(this) { Orientation = Orientation.Vertical }; toolScroll.AddView(rightToolContent); rightPanel.AddView(toolScroll, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, 0, 1));
         viewportFrame.AddView(rightPanel, new FrameLayout.LayoutParams(panelWidth, ViewGroup.LayoutParams.MatchParent, GravityFlags.Right));
         restoreChrome = CompactButton("Show editor", ToggleViewportFullscreen);
         var restoreLayout = new FrameLayout.LayoutParams(Dp(112), Dp(44), GravityFlags.Top | GravityFlags.Right);
@@ -144,6 +143,8 @@ public sealed class MainActivity : Activity
         catch (Exception error) { ShowError(error); }
         SetLeftPanel(true);
         SetRightPanel(false);
+        SetLeftTab("ROM");
+        SetRightTab("General");
         Refresh();
     }
 
@@ -180,6 +181,115 @@ public sealed class MainActivity : Activity
 
     private void AddPanelButton(LinearLayout panel, string label, Action action)
         => panel.AddView(CompactButton(label, action), new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, Dp(48)));
+
+    private void AddTabButton(LinearLayout row, string label, Action action)
+    {
+        var button = CompactButton(label, action);
+        button.SetTextSize(global::Android.Util.ComplexUnitType.Sp, 11);
+        row.AddView(button, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, Dp(44)));
+    }
+
+    private void SetLeftTab(string tab)
+    {
+        leftTab = tab;
+        bool romVisible = tab == "ROM" && (romWorkspace?.Document ?? rom) is not null;
+        sceneList.Visibility = romVisible ? ViewStates.Visible : ViewStates.Gone;
+        roomTitle.Visibility = romVisible ? ViewStates.Visible : ViewStates.Gone;
+        nativeRoomList.Visibility = romVisible ? ViewStates.Visible : ViewStates.Gone;
+        rooms.Visibility = tab == "Layout" ? ViewStates.Visible : ViewStates.Gone;
+        sceneTitle.Text = romVisible ? "Scenes & rooms" : "Mobile layout";
+        RefreshSceneBrowser();
+    }
+
+    private void SetRightTab(string tab)
+    {
+        rightTab = tab;
+        rightToolContent.RemoveAllViews();
+        var tabTitle = new TextView(this) { Text = tab.ToUpperInvariant(), TextSize = 12, Gravity = GravityFlags.CenterVertical, LayoutParameters = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, Dp(34)) };
+        tabTitle.SetTextColor(Color.Rgb(88, 222, 189)); tabTitle.SetTypeface(global::Android.Graphics.Typeface.Default, global::Android.Graphics.TypefaceStyle.Bold); rightToolContent.AddView(tabTitle);
+        if (tab == "General")
+        {
+            rightToolContent.AddView(inspector, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
+            AddPanelButton(rightToolContent, "Open ROM", () => Pick(ImportRom));
+            AddPanelButton(rightToolContent, "Open project", () => Pick(ImportProject));
+            AddPanelButton(rightToolContent, "Reset camera", () => viewport.ResetCamera());
+            AddPanelButton(rightToolContent, "Show/hide actor gizmos", ToggleActorGizmos);
+            AddPanelButton(rightToolContent, "Show/hide room geometry", () => WithRoom(ToggleNativeGeometry));
+            AddPanelButton(rightToolContent, "Show/hide collision", () => WithRoom(ToggleNativeCollision));
+            AddPanelButton(rightToolContent, "Gameplay editor", Gameplay);
+        }
+        else if (tab == "Scene")
+        {
+            AddPanelButton(rightToolContent, "Scene properties", () => WithScene(ShowRomScene));
+            AddPanelButton(rightToolContent, "Scene settings", () => WithScene(EditNativeSceneSettings));
+            AddPanelButton(rightToolContent, "Spawns", () => WithScene(ShowRomSpawns));
+            AddPanelButton(rightToolContent, "Transitions", () => WithScene(ShowRomTransitions));
+            AddPanelButton(rightToolContent, "Paths & waypoints", () => WithScene(ShowRomPaths));
+            AddPanelButton(rightToolContent, "Environments", () => WithScene(ShowRomEnvironments));
+            AddPanelButton(rightToolContent, "Alternate headers", () => WithScene(ShowRomAlternateHeaders));
+            AddPanelButton(rightToolContent, "Clone scene", () => WithScene(CloneNativeScene));
+            AddPanelButton(rightToolContent, "Delete scene", () => WithScene(DeleteNativeScene));
+            AddPanelButton(rightToolContent, "Scene order", ShowSceneOrder);
+        }
+        else if (tab == "Room")
+        {
+            AddPanelButton(rightToolContent, "Room properties", () => WithRoom(ShowRomRoom));
+            AddPanelButton(rightToolContent, "Room settings", () => WithRoom(EditNativeRoomSettings));
+            AddPanelButton(rightToolContent, "Objects", () => WithRoom(ShowRomObjects));
+            AddPanelButton(rightToolContent, "Room exits", () => WithRoom(ShowRomRoomExits));
+            AddPanelButton(rightToolContent, "Clone room", () => WithRoom(CloneNativeRoom));
+            AddPanelButton(rightToolContent, "Delete room", () => WithRoom(DeleteNativeRoom));
+            AddPanelButton(rightToolContent, "Room order", () => WithScene(ShowRoomOrder));
+            AddPanelButton(rightToolContent, "Split room into tiles", () => WithRoom(AddRomRoomTile));
+            AddPanelButton(rightToolContent, "Import custom geometry", () => WithRoom(ImportNativeGeometry));
+        }
+        else if (tab == "Actors")
+        {
+            AddPanelButton(rightToolContent, "Actors in room", () => WithRoom(ShowRomRoom));
+            AddPanelButton(rightToolContent, "Add actor", () => WithRoom(AddNativeActor));
+            AddPanelButton(rightToolContent, "Actor database", ShowActorBrowser);
+            AddPanelButton(rightToolContent, "Select actors on viewport", () => WithRoom(ToggleActorSelection));
+            AddPanelButton(rightToolContent, "Group transform", () => WithRoom(ShowActorGroupTransform));
+            AddPanelButton(rightToolContent, "Spawns", () => WithScene(ShowRomSpawns));
+            AddPanelButton(rightToolContent, "Transitions", () => WithScene(ShowRomTransitions));
+        }
+        else if (tab == "Collision")
+        {
+            AddPanelButton(rightToolContent, "Collision editor", () => WithScene(ShowRomCollisionVertices));
+            AddPanelButton(rightToolContent, "Collision material database", () => WithScene(ShowNativeCollisionMaterialDatabase));
+            AddPanelButton(rightToolContent, "Waterboxes", () => WithScene(ShowRomWaterboxes));
+            AddPanelButton(rightToolContent, "Toggle collision vertices", () => WithRoom(ToggleCollisionOverlay));
+            AddPanelButton(rightToolContent, "Toggle collision triangles", () => WithRoom(ToggleCollisionTriangleOverlay));
+            AddPanelButton(rightToolContent, "Recalculate collision", () => WithScene(RecalculateNativeCollision));
+        }
+        else if (tab == "Geometry")
+        {
+            AddPanelButton(rightToolContent, "Geometry vertices & triangles", () => WithRoom(ShowRomGeometryVertices));
+            AddPanelButton(rightToolContent, "Materials", () => WithRoom(ShowNativeGeometryMaterials));
+            AddPanelButton(rightToolContent, "Display-list sources", () => WithRoom(ShowNativeDisplayListSources));
+            AddPanelButton(rightToolContent, "Texture commands", () => WithRoom(ShowNativeTextureCommands));
+            AddPanelButton(rightToolContent, "Import custom geometry", () => WithRoom(ImportNativeGeometry));
+            AddPanelButton(rightToolContent, "Export reusable tile", () => WithRoom(AddRomRoomTile));
+            AddPanelButton(rightToolContent, "Toggle geometry picking", () => WithRoom(ToggleGeometryOverlay));
+        }
+        else if (tab == "Commands")
+        {
+            AddPanelButton(rightToolContent, "Scene commands", () => WithScene(ShowRomSceneCommands));
+            AddPanelButton(rightToolContent, "Alternate-header commands", () => WithScene(ShowRomAlternateHeaders));
+            AddPanelButton(rightToolContent, "Display-list commands", () => WithRoom(ShowNativeDisplayListSources));
+        }
+        else
+        {
+            AddPanelButton(rightToolContent, "Verify ROM", VerifyEditedRom);
+            AddPanelButton(rightToolContent, "Export ROM", ExportEditedRom);
+            AddPanelButton(rightToolContent, "Export patch", ExportRomPatch);
+            AddPanelButton(rightToolContent, "Export project", ExportProject);
+            AddPanelButton(rightToolContent, "Import tile", () => Pick(ImportTile));
+            AddPanelButton(rightToolContent, "Room catalog", () => Pick(ImportCatalog));
+            AddPanelButton(rightToolContent, "Save mobile layout", () => { LayoutStorage.SaveAtomic(SavePath, history.Current); status.Text = "Layout saved on device."; });
+            AddPanelButton(rightToolContent, "Help", Help);
+        }
+    }
 
     private void SetLeftPanel(bool visible)
     {
@@ -240,11 +350,12 @@ public sealed class MainActivity : Activity
     {
         var current = romWorkspace?.Document ?? rom;
         bool hasRom = current is not null;
-        sceneList.Visibility = hasRom ? ViewStates.Visible : ViewStates.Gone;
-        nativeRoomList.Visibility = hasRom ? ViewStates.Visible : ViewStates.Gone;
-        roomTitle.Visibility = hasRom ? ViewStates.Visible : ViewStates.Gone;
-        rooms.Visibility = hasRom ? ViewStates.Gone : ViewStates.Visible;
-        sceneTitle.Text = hasRom ? $"Scenes · {current!.Scenes.Count}" : "Layout rooms";
+        bool romTab = leftTab == "ROM";
+        sceneList.Visibility = hasRom && romTab ? ViewStates.Visible : ViewStates.Gone;
+        nativeRoomList.Visibility = hasRom && romTab ? ViewStates.Visible : ViewStates.Gone;
+        roomTitle.Visibility = hasRom && romTab ? ViewStates.Visible : ViewStates.Gone;
+        rooms.Visibility = !romTab ? ViewStates.Visible : ViewStates.Gone;
+        sceneTitle.Text = hasRom && romTab ? $"Scenes · {current!.Scenes.Count}" : "Layout rooms";
         documentTitle.Text = hasRom ? $"{current!.Profile.Name} · Scene {(selectedSceneId < 0 ? "—" : selectedSceneId.ToString("X2"))}" : "No ROM loaded";
         if (!hasRom) return;
         var scenes = current!.Scenes;
