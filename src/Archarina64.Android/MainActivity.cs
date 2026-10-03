@@ -32,6 +32,8 @@ public sealed class MainActivity : Activity
     private int inlineActorIndex = -1;
     private string inlineGeometryKind = "vertex";
     private int inlineGeometryIndex = 0, inlineCommandIndex = 0;
+    private string inlineCollisionKind = "vertex";
+    private int inlineCollisionIndex = 0;
     private bool leftPanelVisible = true, rightPanelVisible;
     private string leftTab = "ROM", rightTab = "General";
     private LinearLayout pageRoot = null!;
@@ -288,6 +290,7 @@ public sealed class MainActivity : Activity
             AddPanelButton(rightToolContent, "Toggle collision vertices", () => WithRoom(ToggleCollisionOverlay));
             AddPanelButton(rightToolContent, "Toggle collision triangles", () => WithRoom(ToggleCollisionTriangleOverlay));
             AddPanelButton(rightToolContent, "Recalculate collision", () => WithScene(RecalculateNativeCollision));
+            AddInlineCollisionInspector(CurrentScene());
         }
         else if (tab == "Geometry")
         {
@@ -460,6 +463,74 @@ public sealed class MainActivity : Activity
             try { if (romWorkspace is null) throw new InvalidOperationException("Open a ROM before staging display-list edits."); romWorkspace.EditGeometryCommand(scene.Id, room.Id, command.SourceOffset, checked((uint)ParseUInt64(word0)), checked((uint)ParseUInt64(word1))); status.Text = $"Display-list command {inlineCommandIndex:D3} edit staged."; var current = romWorkspace.Document.Scenes.First(item => item.Id == scene.Id); OpenRoomInViewport(current, current.Rooms[room.Id]); SetRightTab("Commands"); }
             catch (Exception error) { ShowError(error); }
         });
+    }
+
+    private void AddInlineCollisionInspector(RomScene? scene)
+    {
+        var heading = new TextView(this) { Text = "INLINE COLLISION INSPECTOR", TextSize = 12 };
+        heading.SetTextColor(Color.Rgb(88, 222, 189)); heading.SetTypeface(global::Android.Graphics.Typeface.Default, global::Android.Graphics.TypefaceStyle.Bold); heading.SetPadding(Dp(4), Dp(12), Dp(4), Dp(4));
+        rightToolContent.AddView(heading);
+        var collision = scene?.Collision;
+        if (scene is null || collision is null)
+        {
+            var empty = new TextView(this) { Text = "Select a scene with decoded collision to edit it here.", TextSize = 12 };
+            empty.SetTextColor(Color.Rgb(191, 203, 218)); empty.SetPadding(Dp(4), Dp(4), Dp(4), Dp(8)); rightToolContent.AddView(empty);
+            return;
+        }
+        AddToolbar(rightToolContent,
+            ("Vertices", () => { inlineCollisionKind = "vertex"; inlineCollisionIndex = 0; SetRightTab("Collision"); }),
+            ("Triangles", () => { inlineCollisionKind = "triangle"; inlineCollisionIndex = 0; SetRightTab("Collision"); }),
+            ("Surfaces", () => { inlineCollisionKind = "surface"; inlineCollisionIndex = 0; SetRightTab("Collision"); }));
+        int total = inlineCollisionKind switch { "triangle" => collision.Triangles.Count, "surface" => collision.SurfaceTypes.Count, _ => collision.Vertices.Count };
+        if (total == 0) { rightToolContent.AddView(new TextView(this) { Text = "No collision records decoded for this scene." }); return; }
+        inlineCollisionIndex = Math.Clamp(inlineCollisionIndex, 0, total - 1);
+        var indexEditor = NumberEditor(rightToolContent, inlineCollisionKind + " index", inlineCollisionIndex.ToString(CultureInfo.InvariantCulture));
+        AddToolbar(rightToolContent,
+            ("Previous", () => { inlineCollisionIndex = Math.Max(0, inlineCollisionIndex - 1); SetRightTab("Collision"); }),
+            ("Next", () => { inlineCollisionIndex = Math.Min(total - 1, inlineCollisionIndex + 1); SetRightTab("Collision"); }),
+            ("Load index", () => { try { inlineCollisionIndex = Math.Clamp(ParseInt(indexEditor), 0, total - 1); SetRightTab("Collision"); } catch (Exception error) { ShowError(error); } }));
+        if (inlineCollisionKind == "vertex")
+        {
+            var vertex = collision.Vertices[inlineCollisionIndex]; var fields = new LinearLayout(this) { Orientation = Orientation.Vertical }; fields.SetPadding(Dp(4), Dp(4), Dp(4), Dp(4));
+            var x = NumberEditor(fields, "X", vertex.X.ToString(CultureInfo.InvariantCulture)); var y = NumberEditor(fields, "Y", vertex.Y.ToString(CultureInfo.InvariantCulture)); var z = NumberEditor(fields, "Z", vertex.Z.ToString(CultureInfo.InvariantCulture));
+            rightToolContent.AddView(fields, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
+            AddPanelButton(rightToolContent, "Apply collision vertex", () =>
+            {
+                try { if (romWorkspace is null) throw new InvalidOperationException("Open a ROM before staging collision edits."); romWorkspace.EditCollisionVertex(scene.Id, inlineCollisionIndex, new RomCollisionVertex((short)ParseInt(x), (short)ParseInt(y), (short)ParseInt(z))); status.Text = $"Collision vertex {inlineCollisionIndex:D3} edit staged."; RefreshInlineCollision(scene.Id); }
+                catch (Exception error) { ShowError(error); }
+            });
+        }
+        else if (inlineCollisionKind == "triangle")
+        {
+            var triangle = collision.Triangles[inlineCollisionIndex]; var fields = new LinearLayout(this) { Orientation = Orientation.Vertical }; fields.SetPadding(Dp(4), Dp(4), Dp(4), Dp(4));
+            var surface = NumberEditor(fields, "Surface type", triangle.SurfaceType.ToString(CultureInfo.InvariantCulture)); var a = NumberEditor(fields, "A", triangle.A.ToString(CultureInfo.InvariantCulture)); var b = NumberEditor(fields, "B", triangle.B.ToString(CultureInfo.InvariantCulture)); var c = NumberEditor(fields, "C", triangle.C.ToString(CultureInfo.InvariantCulture)); var nx = NumberEditor(fields, "Normal X", triangle.NormalX.ToString(CultureInfo.InvariantCulture)); var ny = NumberEditor(fields, "Normal Y", triangle.NormalY.ToString(CultureInfo.InvariantCulture)); var nz = NumberEditor(fields, "Normal Z", triangle.NormalZ.ToString(CultureInfo.InvariantCulture)); var distance = NumberEditor(fields, "Distance", triangle.Distance.ToString(CultureInfo.InvariantCulture));
+            rightToolContent.AddView(fields, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
+            AddPanelButton(rightToolContent, "Apply collision triangle", () =>
+            {
+                try { if (romWorkspace is null) throw new InvalidOperationException("Open a ROM before staging collision edits."); romWorkspace.EditCollisionTriangle(scene.Id, inlineCollisionIndex, new RomCollisionTriangle((ushort)ParseInt(surface), (ushort)ParseInt(a), (ushort)ParseInt(b), (ushort)ParseInt(c), (short)ParseInt(nx), (short)ParseInt(ny), (short)ParseInt(nz), (short)ParseInt(distance))); status.Text = $"Collision triangle {inlineCollisionIndex:D3} edit staged."; RefreshInlineCollision(scene.Id); }
+                catch (Exception error) { ShowError(error); }
+            });
+        }
+        else
+        {
+            ulong rawValue = collision.SurfaceTypes[inlineCollisionIndex]; var decoded = RomCollisionSurfaceType.Decode(rawValue);
+            var description = new TextView(this) { Text = $"Material {decoded.Material} • floor {decoded.FloorType} • wall {decoded.WallType} • hookshot {(decoded.CanHookshot ? "yes" : "no")}\nEdit the complete packed surface value while preserving unknown bits.", TextSize = 12 };
+            description.SetTextColor(Color.Rgb(191, 203, 218)); description.SetPadding(Dp(4), Dp(4), Dp(4), Dp(4)); rightToolContent.AddView(description);
+            var raw = NumberEditor(rightToolContent, "Packed surface (hex)", $"0x{rawValue:X16}");
+            AddPanelButton(rightToolContent, "Apply collision surface", () =>
+            {
+                try { if (romWorkspace is null) throw new InvalidOperationException("Open a ROM before staging collision edits."); romWorkspace.EditCollisionSurface(scene.Id, inlineCollisionIndex, ParseUInt64(raw)); status.Text = $"Collision surface {inlineCollisionIndex:D3} edit staged."; RefreshInlineCollision(scene.Id); }
+                catch (Exception error) { ShowError(error); }
+            });
+        }
+    }
+
+    private void RefreshInlineCollision(int sceneId)
+    {
+        if (romWorkspace is null) return;
+        var current = romWorkspace.Document.Scenes.First(item => item.Id == sceneId); var room = current.Rooms.FirstOrDefault(item => item.Id == selectedRoomId);
+        if (room is not null) OpenRoomInViewport(current, room); else RefreshSceneBrowser();
+        SetRightTab("Collision");
     }
 
     private void SetLeftPanel(bool visible)
