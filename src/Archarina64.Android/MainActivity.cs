@@ -342,13 +342,30 @@ public sealed class MainActivity : Activity
             ("Spawns", () => { inlineSceneKind = "spawn"; inlineSceneIndex = 0; SetRightTab("Scene"); }),
             ("Transitions", () => { inlineSceneKind = "transition"; inlineSceneIndex = 0; SetRightTab("Scene"); }),
             ("Environment", () => { inlineSceneKind = "environment"; inlineSceneIndex = 0; SetRightTab("Scene"); }),
-            ("Waterboxes", () => { inlineSceneKind = "waterbox"; inlineSceneIndex = 0; SetRightTab("Scene"); }));
+            ("Waterboxes", () => { inlineSceneKind = "waterbox"; inlineSceneIndex = 0; SetRightTab("Scene"); }),
+            ("Commands", () => { inlineSceneKind = "command"; inlineSceneIndex = 0; SetRightTab("Scene"); }));
         if (inlineSceneKind == "settings")
         {
             var settings = scene.Settings ?? new RomSceneSettings(0, 0); var panel = new LinearLayout(this) { Orientation = Orientation.Vertical };
             var camera = NumberEditor(panel, "Camera movement", settings.CameraMovement.ToString(CultureInfo.InvariantCulture)); var world = NumberEditor(panel, "World map", settings.WorldMap.ToString(CultureInfo.InvariantCulture));
             rightToolContent.AddView(panel, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
             AddPanelButton(rightToolContent, "Apply scene settings", () => { try { if (romWorkspace is null) throw new InvalidOperationException("Open a ROM before staging scene edits."); romWorkspace.EditSceneSettings(scene.Id, new RomSceneSettings((byte)ParseInt(camera), (byte)ParseInt(world))); status.Text = "Native scene settings edit staged."; RefreshInlineScene(scene.Id); } catch (Exception error) { ShowError(error); } });
+            return;
+        }
+        if (inlineSceneKind == "command")
+        {
+            var commands = scene.Commands ?? []; inlineSceneIndex = Math.Clamp(inlineSceneIndex, 0, Math.Max(commands.Count - 1, 0));
+            var commandPanel = new LinearLayout(this) { Orientation = Orientation.Vertical }; commandPanel.SetPadding(Dp(4), Dp(4), Dp(4), Dp(4));
+            int commandIndex = commands.Count == 0 ? 0 : inlineSceneIndex; var command = commands.Count == 0 ? new RomHeaderCommand(0, 0, 0) : commands[commandIndex];
+            var commandEditor = NumberEditor(commandPanel, "Command (hex)", $"0x{command.Command:X2}"); var parameterEditor = NumberEditor(commandPanel, "Parameter", command.Parameter.ToString(CultureInfo.InvariantCulture)); var pointerEditor = NumberEditor(commandPanel, "Value / pointer (hex)", $"0x{command.Pointer:X8}");
+            if (commands.Count > 0)
+            {
+                var commandIndexEditor = NumberEditor(rightToolContent, "Command index", inlineSceneIndex.ToString(CultureInfo.InvariantCulture));
+                AddToolbar(rightToolContent, ("Previous", () => { inlineSceneIndex = Math.Max(0, inlineSceneIndex - 1); SetRightTab("Scene"); }), ("Next", () => { inlineSceneIndex = Math.Min(commands.Count - 1, inlineSceneIndex + 1); SetRightTab("Scene"); }), ("Load index", () => { try { inlineSceneIndex = Math.Clamp(ParseInt(commandIndexEditor), 0, commands.Count - 1); SetRightTab("Scene"); } catch (Exception error) { ShowError(error); } }));
+            }
+            rightToolContent.AddView(commandPanel, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
+            AddPanelButton(rightToolContent, commands.Count == 0 ? "Append scene command" : "Apply scene command", () => { try { if (romWorkspace is null) throw new InvalidOperationException("Open a ROM before staging scene command edits."); var updated = new RomHeaderCommand((byte)ParseInt(commandEditor), (byte)ParseInt(parameterEditor), (uint)ParseUInt64(pointerEditor)); if (commands.Count == 0) romWorkspace.InsertSceneCommand(scene.Id, updated); else romWorkspace.EditSceneCommand(scene.Id, inlineSceneIndex, updated); status.Text = commands.Count == 0 ? "Scene command insertion staged." : $"Scene command {inlineSceneIndex:D2} edit staged."; RefreshInlineScene(scene.Id); } catch (Exception error) { ShowError(error); } });
+            if (commands.Count > 0) AddPanelButton(rightToolContent, "Delete final scene command", () => { try { if (romWorkspace is null) throw new InvalidOperationException("Open a ROM before staging scene command edits."); romWorkspace.DeleteSceneCommand(scene.Id, commands.Count - 1); inlineSceneIndex = Math.Max(0, inlineSceneIndex - 1); status.Text = "Final scene command deletion staged."; RefreshInlineScene(scene.Id); } catch (Exception error) { ShowError(error); } });
             return;
         }
         var records = inlineSceneKind switch { "spawn" => scene.SpawnPoints?.Count ?? 0, "transition" => scene.Transitions?.Count ?? 0, "environment" => scene.Environments?.Count ?? 0, "waterbox" => scene.Collision?.Waterboxes?.Count ?? 0, _ => 0 };
