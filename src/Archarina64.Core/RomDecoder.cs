@@ -278,20 +278,40 @@ public static class RomDecoder
     private static void ReadDisplayList(byte[] room, int offset, HashSet<int> lists, HashSet<int> visited, Dictionary<int, int> slots, List<RomGeometryVertex> vertices, List<int> vertexOffsets, List<int> vertexSlots, List<RomGeometryTriangle> triangles, List<int> triangleOffsets, List<uint> trianglePrefixes, List<RomDisplayListCommand> commands, List<string> diagnostics, int depth)
     {
         if (depth > 16 || offset < 0 || offset + 8 > room.Length || !visited.Add(offset)) return;
+        // A mesh table can contain stale/segment-local pointers. Do not walk
+        // arbitrary room bytes as a display list unless a bounded scan finds
+        // an actual end command. This keeps malformed lists from poisoning
+        // the shared vertex-slot map and creating giant triangles.
+        bool terminated = false;
+        for (int probe = offset; probe + 8 <= room.Length && probe < offset + 0x4000; probe += 8)
+        {
+            byte probeOp = room[probe];
+            if (probeOp == 0xB8 || probeOp == 0xDF) { terminated = true; break; }
+        }
+        if (!terminated) return;
         for (int p = offset; p + 8 <= room.Length && p < offset + 0x20000; p += 8)
         {
             uint w0 = U32(room, p), w1 = U32(room, p + 4); byte op = (byte)(w0 >> 24);
             commands.Add(new RomDisplayListCommand(p, op, w0, w1));
-            if (op == 0xB8) break;
+            // OoT retail rooms use the F3DEX2 G_ENDDL opcode (0xDF). Keep
+            // accepting 0xB8 for the older synthetic/legacy room format, but
+            // never walk past a real display-list terminator into room data.
+            if (op == 0xB8 || op == 0xDF) break;
             if (op == 0x01)
             {
                 int number = (int)((w0 >> 12) & 0xFF), first = (int)((w0 >> 1) & 0x7F), source = checked((int)(w1 & 0x00FFFFFF));
                 if (number > 32 || source < 0 || source + number * 16 > room.Length) { diagnostics.Add("F3DEX vertex command exceeds room bounds."); continue; }
                 for (int i = 0; i < number; i++) { int q = source + i * 16; vertices.Add(new RomGeometryVertex(S16(room, q), S16(room, q + 2), S16(room, q + 4), S16(room, q + 8), S16(room, q + 10), room[q + 12], room[q + 13], room[q + 14], room[q + 15])); vertexOffsets.Add(q); vertexSlots.Add(first + i); slots[first + i] = vertices.Count - 1; }
             }
+            // F3DEX2 uses 0x05/0x06 for TRI1/TRI2 and 0xDE for display-list
+            // calls. The legacy OoT microcode form uses 0xBF/0xB1. Mixing
+            // these up makes triangle payloads look like child pointers and
+            // produces the long, invalid spikes seen in the Android viewport.
+            else if (op == 0x05) AddF3Dex2Triangle(w0, p, slots, triangles, triangleOffsets, trianglePrefixes);
+            else if (op == 0x06) { AddF3Dex2Triangle(w0, p, slots, triangles, triangleOffsets, trianglePrefixes); AddF3Dex2Triangle(w1, p + 4, slots, triangles, triangleOffsets, trianglePrefixes); }
             else if (op == 0xBF) AddTriangle(w1, p + 4, 0, slots, triangles, triangleOffsets, trianglePrefixes);
             else if (op == 0xB1) { AddTriangle(w0, p, 0xB1000000, slots, triangles, triangleOffsets, trianglePrefixes); AddTriangle(w1, p + 4, 0, slots, triangles, triangleOffsets, trianglePrefixes); }
-            else if (op == 0x06) { int child = checked((int)(w1 & 0x00FFFFFF)); ReadDisplayList(room, child, lists, visited, slots, vertices, vertexOffsets, vertexSlots, triangles, triangleOffsets, trianglePrefixes, commands, diagnostics, depth + 1); }
+            else if (op == 0xDE) { int child = checked((int)(w1 & 0x00FFFFFF)); ReadDisplayList(room, child, lists, visited, slots, vertices, vertexOffsets, vertexSlots, triangles, triangleOffsets, trianglePrefixes, commands, diagnostics, depth + 1); }
         }
     }
 
@@ -299,6 +319,12 @@ public static class RomDecoder
     {
         int a = (int)((packed >> 17) & 0x7F) / 2, b = (int)((packed >> 9) & 0x7F) / 2, c = (int)((packed >> 1) & 0x7F) / 2;
         if (slots.TryGetValue(a, out int ai) && slots.TryGetValue(b, out int bi) && slots.TryGetValue(c, out int ci)) { triangles.Add(new RomGeometryTriangle(ai, bi, ci)); triangleOffsets.Add(sourceOffset); trianglePrefixes.Add(prefix); }
+    }
+
+    private static void AddF3Dex2Triangle(uint packed, int sourceOffset, Dictionary<int, int> slots, List<RomGeometryTriangle> triangles, List<int> triangleOffsets, List<uint> trianglePrefixes)
+    {
+        int a = (int)((packed >> 16) & 0xFF) / 2, b = (int)((packed >> 8) & 0xFF) / 2, c = (int)(packed & 0xFF) / 2;
+        if (slots.TryGetValue(a, out int ai) && slots.TryGetValue(b, out int bi) && slots.TryGetValue(c, out int ci)) { triangles.Add(new RomGeometryTriangle(ai, bi, ci)); triangleOffsets.Add(sourceOffset); trianglePrefixes.Add(0); }
     }
 
     private static byte[] DecodeRange(byte[] rom, uint start, uint end)

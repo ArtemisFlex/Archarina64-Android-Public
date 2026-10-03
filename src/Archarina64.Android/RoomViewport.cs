@@ -152,7 +152,36 @@ internal sealed class RoomRenderer : Java.Lang.Object, GLSurfaceView.IRenderer
     public static RenderFrame BuildNativeFrame(RomRoomGeometry? geometry, RomCollisionData? collision, bool showGeometry, bool showCollision)
     {
         var points = new List<Vector3>();
-        if (showGeometry && geometry is not null) points.AddRange(geometry.Vertices.Select(v => new Vector3(v.X, v.Y, v.Z)));
+        var geometryTriangles = new List<(RomGeometryVertex A, RomGeometryVertex B, RomGeometryVertex C)>();
+        if (showGeometry && geometry is not null)
+        {
+            var candidates = geometry.Triangles
+                .Where(t => t.A >= 0 && t.B >= 0 && t.C >= 0 && t.A < geometry.Vertices.Count && t.B < geometry.Vertices.Count && t.C < geometry.Vertices.Count)
+                .Select(t => (A: geometry.Vertices[t.A], B: geometry.Vertices[t.B], C: geometry.Vertices[t.C]))
+                .ToArray();
+            // A malformed display-list pointer can still produce an in-range
+            // vertex with a huge edge. Drop those outliers before framing or
+            // drawing; otherwise one bad triangle turns into viewport-sized
+            // spikes and makes the whole room unusable.
+            var edgeLengths = candidates.SelectMany(t =>
+            {
+                var a = new Vector3(t.A.X, t.A.Y, t.A.Z); var b = new Vector3(t.B.X, t.B.Y, t.B.Z); var c = new Vector3(t.C.X, t.C.Y, t.C.Z);
+                return new[] { Vector3.Distance(a, b), Vector3.Distance(b, c), Vector3.Distance(c, a) };
+            }).OrderBy(value => value).ToArray();
+            float medianEdge = edgeLengths.Length == 0 ? 0 : edgeLengths[edgeLengths.Length / 2];
+            float edgeLimit = MathF.Max(8000f, medianEdge * 12f);
+            geometryTriangles.AddRange(candidates.Where(t =>
+            {
+                var a = new Vector3(t.A.X, t.A.Y, t.A.Z); var b = new Vector3(t.B.X, t.B.Y, t.B.Z); var c = new Vector3(t.C.X, t.C.Y, t.C.Z);
+                return Vector3.Distance(a, b) <= edgeLimit && Vector3.Distance(b, c) <= edgeLimit && Vector3.Distance(c, a) <= edgeLimit;
+            }));
+            foreach (var triangle in geometryTriangles)
+            {
+                points.Add(new Vector3(triangle.A.X, triangle.A.Y, triangle.A.Z));
+                points.Add(new Vector3(triangle.B.X, triangle.B.Y, triangle.B.Z));
+                points.Add(new Vector3(triangle.C.X, triangle.C.Y, triangle.C.Z));
+            }
+        }
         if (showCollision && collision?.Vertices is { } collisionVertices) points.AddRange(collisionVertices.Select(v => new Vector3(v.X, v.Y, v.Z)));
         if (points.Count == 0) return new RenderFrame([], null);
         Vector3 minimum = points[0], maximum = points[0];
@@ -163,10 +192,9 @@ internal sealed class RoomRenderer : Java.Lang.Object, GLSurfaceView.IRenderer
 
         if (showGeometry && geometry is not null)
         {
-            foreach (var triangle in geometry.Triangles)
+            foreach (var triangle in geometryTriangles)
             {
-                if (triangle.A < 0 || triangle.B < 0 || triangle.C < 0 || triangle.A >= geometry.Vertices.Count || triangle.B >= geometry.Vertices.Count || triangle.C >= geometry.Vertices.Count) continue;
-                var a = geometry.Vertices[triangle.A]; var b = geometry.Vertices[triangle.B]; var c = geometry.Vertices[triangle.C];
+                var a = triangle.A; var b = triangle.B; var c = triangle.C;
                 var normal = Vector3.Cross(new Vector3(b.X - a.X, b.Y - a.Y, b.Z - a.Z), new Vector3(c.X - a.X, c.Y - a.Y, c.Z - a.Z));
                 float light = normal.LengthSquared() < 1e-10f ? 0.7f : 0.45f + 0.55f * MathF.Abs(Vector3.Dot(Vector3.Normalize(normal), Vector3.Normalize(new Vector3(1, 2, 3))));
                 Vector3[] pointsForTriangle = [new(a.X, a.Y, a.Z), new(b.X, b.Y, b.Z), new(c.X, c.Y, c.Z)];
