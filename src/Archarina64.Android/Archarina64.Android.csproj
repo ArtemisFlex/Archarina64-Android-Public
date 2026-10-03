@@ -6,8 +6,8 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <ApplicationId>org.archarina64.android</ApplicationId>
-    <ApplicationVersion>14</ApplicationVersion>
-    <ApplicationDisplayVersion>0.2.3</ApplicationDisplayVersion>
+    <ApplicationVersion>15</ApplicationVersion>
+    <ApplicationDisplayVersion>0.2.4</ApplicationDisplayVersion>
     <ApplicationTitle>Archarina64 Android</ApplicationTitle>
     <RuntimeIdentifiers>android-arm64;android-x64</RuntimeIdentifiers>
     <AndroidPackageFormats>apk</AndroidPackageFormats>
