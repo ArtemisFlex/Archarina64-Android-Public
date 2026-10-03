@@ -400,11 +400,18 @@ public sealed class MainActivity : Activity
     private void OpenRoomInViewport(RomScene scene, RomRoom room)
     {
         selectedSceneId = scene.Id; selectedRoomId = room.Id;
-        viewport.ShowNativeRoom(room.Geometry, scene.Collision, nativeGeometryVisible, nativeCollisionVisible);
+        viewport.ShowNativeRoom(room.Geometry, scene.Collision, nativeGeometryVisible, nativeCollisionVisible, GetNativePreviewTexture(room));
         ShowActorOverlay(scene, room);
         inspector.Text = $"Scene {scene.Id:X2} · {scene.Name}\nRoom {room.Id:D2} · {room.Actors.Count} actors · {room.ObjectCount} objects\nGeometry: {room.Geometry?.Triangles.Count ?? 0} triangles · Collision: {scene.Collision?.Triangles.Count ?? 0} triangles";
         RefreshSceneBrowser();
         status.Text = $"Scene {scene.Id:X2} / Room {room.Id:D2} · drag to orbit, pinch to zoom.";
+    }
+
+    private RomTextureAsset? GetNativePreviewTexture(RomRoom room)
+    {
+        if (loadedRomBytes is not { } bytes) return null;
+        try { return RomTextureDecoder.ExtractRoomTextures(bytes, room).FirstOrDefault(asset => asset.IsDecoded); }
+        catch { return null; }
     }
 
     private void SelectDefaultRomScene()
@@ -1324,7 +1331,7 @@ public sealed class MainActivity : Activity
     {
         nativeGeometryVisible = !nativeGeometryVisible;
         status.Text = nativeGeometryVisible ? "Native room geometry render enabled." : "Native room geometry render hidden.";
-        viewport.ShowNativeRoom(room.Geometry, scene.Collision, nativeGeometryVisible, nativeCollisionVisible);
+        viewport.ShowNativeRoom(room.Geometry, scene.Collision, nativeGeometryVisible, nativeCollisionVisible, GetNativePreviewTexture(room));
         ShowActorOverlay(scene, room);
     }
 
@@ -1332,7 +1339,7 @@ public sealed class MainActivity : Activity
     {
         nativeCollisionVisible = !nativeCollisionVisible;
         status.Text = nativeCollisionVisible ? "Native collision render enabled." : "Native collision render hidden.";
-        viewport.ShowNativeRoom(room.Geometry, scene.Collision, nativeGeometryVisible, nativeCollisionVisible);
+        viewport.ShowNativeRoom(room.Geometry, scene.Collision, nativeGeometryVisible, nativeCollisionVisible, GetNativePreviewTexture(room));
         ShowActorOverlay(scene, room);
     }
 

@@ -39,9 +39,9 @@ public sealed class RoomViewport : GLSurfaceView
         RequestRender();
     }
 
-    public void ShowNativeRoom(RomRoomGeometry? geometry, RomCollisionData? collision, bool showGeometry, bool showCollision)
+    public void ShowNativeRoom(RomRoomGeometry? geometry, RomCollisionData? collision, bool showGeometry, bool showCollision, RomTextureAsset? texture = null)
     {
-        var data = RoomRenderer.BuildNativeFrame(geometry, collision, showGeometry, showCollision);
+        var data = RoomRenderer.BuildNativeFrame(geometry, collision, showGeometry, showCollision, texture);
         QueueEvent(() => renderer.SetFrame(data));
         RequestRender();
     }
@@ -77,7 +77,9 @@ public sealed class RoomViewport : GLSurfaceView
 
 internal sealed class RoomRenderer : Java.Lang.Object, GLSurfaceView.IRenderer
 {
-    internal sealed record RenderFrame(float[] Vertices, byte[]? TextureBytes);
+    // Each vertex is position(3), RGBA(4), UV(2), texture flag(1). Native room
+    // previews use the same decoded RGBA pixels as the ROM texture inspector.
+    internal sealed record RenderFrame(float[] Vertices, byte[]? TextureBytes, int TextureWidth = 0, int TextureHeight = 0, bool TextureIsRgba = false);
     private FloatBuffer? buffer;
     private int count, program, position, color, uv, useTexture, mvp, sampler, textureId;
     private float aspect = 1;
@@ -89,17 +91,22 @@ internal sealed class RoomRenderer : Java.Lang.Object, GLSurfaceView.IRenderer
         float[] vertices = frame.Vertices;
         buffer?.Dispose();
         buffer = ByteBuffer.AllocateDirect(vertices.Length * sizeof(float))!.Order(ByteOrder.NativeOrder()!)!.AsFloatBuffer()!;
-        buffer.Put(vertices); buffer.Position(0); count = vertices.Length / 9;
+        buffer.Put(vertices); buffer.Position(0); count = vertices.Length / 10;
         if (textureId != 0) { GLES20.GlDeleteTextures(1, [textureId], 0); textureId = 0; }
         if (frame.TextureBytes is { Length: > 0 })
         {
-            using var bitmap = BitmapFactory.DecodeByteArray(frame.TextureBytes, 0, frame.TextureBytes.Length) ?? throw new InvalidDataException("Embedded texture could not be decoded.");
+            using Bitmap bitmap = frame.TextureIsRgba
+                ? CreateRgbaBitmap(frame.TextureBytes, frame.TextureWidth, frame.TextureHeight)
+                : BitmapFactory.DecodeByteArray(frame.TextureBytes, 0, frame.TextureBytes.Length) ?? throw new InvalidDataException("Embedded texture could not be decoded.");
             int[] ids = new int[1]; GLES20.GlGenTextures(1, ids, 0); textureId = ids[0];
             GLES20.GlBindTexture(GLES20.GlTexture2d, textureId);
             GLES20.GlTexParameteri(GLES20.GlTexture2d, GLES20.GlTextureMinFilter, GLES20.GlLinear);
             GLES20.GlTexParameteri(GLES20.GlTexture2d, GLES20.GlTextureMagFilter, GLES20.GlLinear);
-            GLES20.GlTexParameteri(GLES20.GlTexture2d, GLES20.GlTextureWrapS, GLES20.GlRepeat);
-            GLES20.GlTexParameteri(GLES20.GlTexture2d, GLES20.GlTextureWrapT, GLES20.GlRepeat);
+            // Native N64 tiles clamp at the tile edge unless a display-list
+            // mask explicitly requests wrapping. Clamp is the safe default for
+            // an extracted tile and avoids NPOT texture artifacts on GLES 2.
+            GLES20.GlTexParameteri(GLES20.GlTexture2d, GLES20.GlTextureWrapS, frame.TextureIsRgba ? GLES20.GlClampToEdge : GLES20.GlRepeat);
+            GLES20.GlTexParameteri(GLES20.GlTexture2d, GLES20.GlTextureWrapT, frame.TextureIsRgba ? GLES20.GlClampToEdge : GLES20.GlRepeat);
             GLUtils.TexImage2D(GLES20.GlTexture2d, 0, bitmap, 0);
             GLES20.GlBindTexture(GLES20.GlTexture2d, 0);
         }
@@ -142,14 +149,14 @@ internal sealed class RoomRenderer : Java.Lang.Object, GLSurfaceView.IRenderer
                     var color = Vector3.Min(materialColor * roomColor * light, Vector3.One);
                     int uvIndex = i + corner < mesh.TexCoordIndices.Length ? mesh.TexCoordIndices[i + corner] : -1;
                     Vector2 uvValue = textured && uvIndex >= 0 && uvIndex < mesh.UVs.Length ? mesh.UVs[uvIndex] : Vector2.Zero;
-                    vertices.AddRange([v.X, v.Y, v.Z, color.X, color.Y, color.Z, uvValue.X, 1 - uvValue.Y, textured ? 1 : 0]);
+                    vertices.AddRange([v.X, v.Y, v.Z, color.X, color.Y, color.Z, 1, uvValue.X, 1 - uvValue.Y, textured ? 1 : 0]);
                 }
             }
         }
         return new RenderFrame(vertices.ToArray(), selectedTextureBytes);
     }
 
-    public static RenderFrame BuildNativeFrame(RomRoomGeometry? geometry, RomCollisionData? collision, bool showGeometry, bool showCollision)
+    public static RenderFrame BuildNativeFrame(RomRoomGeometry? geometry, RomCollisionData? collision, bool showGeometry, bool showCollision, RomTextureAsset? texture = null)
     {
         var points = new List<Vector3>();
         var geometryTriangles = new List<(RomGeometryVertex A, RomGeometryVertex B, RomGeometryVertex C)>();
@@ -189,6 +196,7 @@ internal sealed class RoomRenderer : Java.Lang.Object, GLSurfaceView.IRenderer
         Vector3 center = (minimum + maximum) / 2;
         float scale = 2f / MathF.Max((maximum - minimum).Length(), 1);
         var vertices = new List<float>();
+        bool hasTexture = texture is { IsDecoded: true, Width: > 0, Height: > 0 };
 
         if (showGeometry && geometry is not null)
         {
@@ -199,7 +207,19 @@ internal sealed class RoomRenderer : Java.Lang.Object, GLSurfaceView.IRenderer
                 float light = normal.LengthSquared() < 1e-10f ? 0.7f : 0.45f + 0.55f * MathF.Abs(Vector3.Dot(Vector3.Normalize(normal), Vector3.Normalize(new Vector3(1, 2, 3))));
                 Vector3[] pointsForTriangle = [new(a.X, a.Y, a.Z), new(b.X, b.Y, b.Z), new(c.X, c.Y, c.Z)];
                 Vector3 faceColor = new((a.R + b.R + c.R) / (3f * 255f), (a.G + b.G + c.G) / (3f * 255f), (a.B + b.B + c.B) / (3f * 255f));
-                foreach (var point in pointsForTriangle) { var p = (point - center) * scale; var color = Vector3.Min(faceColor * light, Vector3.One); vertices.AddRange([p.X, p.Y, p.Z, color.X, color.Y, color.Z, 0, 0, 0]); }
+                var sourceVertices = new[] { a, b, c };
+                for (int corner = 0; corner < sourceVertices.Length; corner++)
+                {
+                    var source = sourceVertices[corner]; var point = pointsForTriangle[corner]; var p = (point - center) * scale;
+                    var color = Vector3.Min(faceColor * light, Vector3.One);
+                    // OoT vertex S/T coordinates are signed 5.10 values. Keep
+                    // them in texture space so extracted native tiles follow
+                    // the same orientation as the ROM display list.
+                    float u = hasTexture ? source.S / 32f / texture!.Width : 0;
+                    float v = hasTexture ? source.T / 32f / texture!.Height : 0;
+                    float alpha = (a.A + b.A + c.A) / (3f * 255f);
+                    vertices.AddRange([p.X, p.Y, p.Z, color.X, color.Y, color.Z, alpha, u, 1 - v, hasTexture ? 1 : 0]);
+                }
             }
         }
 
@@ -209,16 +229,18 @@ internal sealed class RoomRenderer : Java.Lang.Object, GLSurfaceView.IRenderer
             {
                 if (triangle.A >= collisionTriangleVertices.Count || triangle.B >= collisionTriangleVertices.Count || triangle.C >= collisionTriangleVertices.Count) continue;
                 var a = collisionTriangleVertices[triangle.A]; var b = collisionTriangleVertices[triangle.B]; var c = collisionTriangleVertices[triangle.C];
-                foreach (var point in new[] { new Vector3(a.X, a.Y, a.Z), new Vector3(b.X, b.Y, b.Z), new Vector3(c.X, c.Y, c.Z) }) { var p = (point - center) * scale; vertices.AddRange([p.X, p.Y, p.Z, 0.9f, 0.18f, 0.22f, 0, 0, 0]); }
+                foreach (var point in new[] { new Vector3(a.X, a.Y, a.Z), new Vector3(b.X, b.Y, b.Z), new Vector3(c.X, c.Y, c.Z) }) { var p = (point - center) * scale; vertices.AddRange([p.X, p.Y, p.Z, 0.9f, 0.18f, 0.22f, 0.55f, 0, 0, 0]); }
             }
         }
-        return new RenderFrame(vertices.ToArray(), null);
+        return new RenderFrame(vertices.ToArray(), hasTexture ? texture!.Rgba : null, hasTexture ? texture!.Width : 0, hasTexture ? texture!.Height : 0, hasTexture);
     }
 
     public void OnSurfaceCreated(IGL10? gl, EGLConfig? config)
     {
-        int vs = Compile(GLES20.GlVertexShader, "attribute vec3 aPosition; attribute vec3 aColor; attribute vec2 aUv; attribute float aUseTexture; uniform mat4 uMvp; varying vec3 vColor; varying vec2 vUv; varying float vUseTexture; void main(){ vColor=aColor; vUv=aUv; vUseTexture=aUseTexture; gl_Position=uMvp*vec4(aPosition,1.0); }");
-        int fs = Compile(GLES20.GlFragmentShader, "precision mediump float; varying vec3 vColor; varying vec2 vUv; varying float vUseTexture; uniform sampler2D uTexture; void main(){ vec4 base=vec4(vColor,1.0); if(vUseTexture>0.5) base*=texture2D(uTexture,vUv); gl_FragColor=base; }");
+        int vs = Compile(GLES20.GlVertexShader, "attribute vec3 aPosition; attribute vec4 aColor; attribute vec2 aUv; attribute float aUseTexture; uniform mat4 uMvp; varying vec4 vColor; varying vec2 vUv; varying float vUseTexture; void main(){ vColor=aColor; vUv=aUv; vUseTexture=aUseTexture; gl_Position=uMvp*vec4(aPosition,1.0); }");
+        // The N64 RDP performs alpha compare for cutouts. This keeps native
+        // fence, foliage, and decal textures from becoming opaque rectangles.
+        int fs = Compile(GLES20.GlFragmentShader, "precision mediump float; varying vec4 vColor; varying vec2 vUv; varying float vUseTexture; uniform sampler2D uTexture; void main(){ vec4 base=vColor; if(vUseTexture>0.5) base*=texture2D(uTexture,vUv); if(base.a<0.5) discard; gl_FragColor=base; }");
         program = GLES20.GlCreateProgram();
         GLES20.GlAttachShader(program, vs); GLES20.GlAttachShader(program, fs); GLES20.GlLinkProgram(program);
         int[] linked = new int[1]; GLES20.GlGetProgramiv(program, GLES20.GlLinkStatus, linked, 0);
@@ -239,10 +261,11 @@ internal sealed class RoomRenderer : Java.Lang.Object, GLSurfaceView.IRenderer
         GlesMatrix.SetLookAtM(view, 0, distance * MathF.Cos(Pitch) * MathF.Sin(Yaw), distance * MathF.Sin(Pitch), distance * MathF.Cos(Pitch) * MathF.Cos(Yaw), 0, 0, 0, 0, 1, 0);
         GlesMatrix.MultiplyMM(matrix, 0, projection, 0, view, 0);
         GLES20.GlUseProgram(program); GLES20.GlUniformMatrix4fv(mvp, 1, false, matrix, 0); GLES20.GlActiveTexture(GLES20.GlTexture0); GLES20.GlBindTexture(GLES20.GlTexture2d, textureId); GLES20.GlUniform1i(sampler, 0);
-        buffer.Position(0); GLES20.GlVertexAttribPointer(position, 3, GLES20.GlFloat, false, 36, buffer); GLES20.GlEnableVertexAttribArray(position);
-        buffer.Position(3); GLES20.GlVertexAttribPointer(color, 3, GLES20.GlFloat, false, 36, buffer); GLES20.GlEnableVertexAttribArray(color);
-        buffer.Position(6); GLES20.GlVertexAttribPointer(uv, 2, GLES20.GlFloat, false, 36, buffer); GLES20.GlEnableVertexAttribArray(uv);
-        buffer.Position(8); GLES20.GlVertexAttribPointer(useTexture, 1, GLES20.GlFloat, false, 36, buffer); GLES20.GlEnableVertexAttribArray(useTexture);
+        const int stride = 40;
+        buffer.Position(0); GLES20.GlVertexAttribPointer(position, 3, GLES20.GlFloat, false, stride, buffer); GLES20.GlEnableVertexAttribArray(position);
+        buffer.Position(3); GLES20.GlVertexAttribPointer(color, 4, GLES20.GlFloat, false, stride, buffer); GLES20.GlEnableVertexAttribArray(color);
+        buffer.Position(7); GLES20.GlVertexAttribPointer(uv, 2, GLES20.GlFloat, false, stride, buffer); GLES20.GlEnableVertexAttribArray(uv);
+        buffer.Position(9); GLES20.GlVertexAttribPointer(useTexture, 1, GLES20.GlFloat, false, stride, buffer); GLES20.GlEnableVertexAttribArray(useTexture);
         GLES20.GlDrawArrays(GLES20.GlTriangles, 0, count);
     }
 
@@ -252,5 +275,19 @@ internal sealed class RoomRenderer : Java.Lang.Object, GLSurfaceView.IRenderer
         int[] result = new int[1]; GLES20.GlGetShaderiv(shader, GLES20.GlCompileStatus, result, 0);
         if (result[0] == 0) throw new InvalidOperationException(GLES20.GlGetShaderInfoLog(shader));
         return shader;
+    }
+
+    private static Bitmap CreateRgbaBitmap(byte[] rgba, int width, int height)
+    {
+        if (width <= 0 || height <= 0 || rgba.Length < checked(width * height * 4)) throw new InvalidDataException("Native texture dimensions or pixels are invalid.");
+        var bitmap = Bitmap.CreateBitmap(width, height, Bitmap.Config.Argb8888!)!;
+        var pixels = new int[width * height];
+        for (int index = 0; index < pixels.Length; index++)
+        {
+            int source = index * 4;
+            pixels[index] = Color.Argb(rgba[source + 3], rgba[source], rgba[source + 1], rgba[source + 2]);
+        }
+        bitmap.SetPixels(pixels, 0, width, 0, 0, width, height);
+        return bitmap;
     }
 }
