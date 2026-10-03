@@ -34,6 +34,10 @@ public sealed class MainActivity : Activity
     private int inlineGeometryIndex = 0, inlineCommandIndex = 0;
     private string inlineCollisionKind = "vertex";
     private int inlineCollisionIndex = 0;
+    private string inlineSceneKind = "settings";
+    private int inlineSceneIndex = 0;
+    private string inlineRoomKind = "settings";
+    private int inlineRoomIndex = 0;
     private bool leftPanelVisible = true, rightPanelVisible;
     private string leftTab = "ROM", rightTab = "General";
     private LinearLayout pageRoot = null!;
@@ -258,6 +262,7 @@ public sealed class MainActivity : Activity
             AddPanelButton(rightToolContent, "Clone scene", () => WithScene(CloneNativeScene));
             AddPanelButton(rightToolContent, "Delete scene", () => WithScene(DeleteNativeScene));
             AddPanelButton(rightToolContent, "Scene order", ShowSceneOrder);
+            AddInlineSceneInspector(CurrentScene());
         }
         else if (tab == "Room")
         {
@@ -270,6 +275,7 @@ public sealed class MainActivity : Activity
             AddPanelButton(rightToolContent, "Room order", () => WithScene(ShowRoomOrder));
             AddPanelButton(rightToolContent, "Split room into tiles", () => WithRoom(AddRomRoomTile));
             AddPanelButton(rightToolContent, "Import custom geometry", () => WithRoom(ImportNativeGeometry));
+            AddInlineRoomInspector(CurrentScene(), CurrentRoom());
         }
         else if (tab == "Actors")
         {
@@ -321,6 +327,96 @@ public sealed class MainActivity : Activity
             AddPanelButton(rightToolContent, "Save mobile layout", () => { LayoutStorage.SaveAtomic(SavePath, history.Current); status.Text = "Layout saved on device."; });
             AddPanelButton(rightToolContent, "Help", Help);
         }
+    }
+
+    private void AddInlineSceneInspector(RomScene? scene)
+    {
+        AddSectionHeader(rightToolContent, "INLINE SCENE WORKSPACE");
+        if (scene is null)
+        {
+            rightToolContent.AddView(new TextView(this) { Text = "Select a ROM scene to edit settings, spawns, transitions, environments, and waterboxes here." });
+            return;
+        }
+        AddToolbar(rightToolContent,
+            ("Settings", () => { inlineSceneKind = "settings"; inlineSceneIndex = 0; SetRightTab("Scene"); }),
+            ("Spawns", () => { inlineSceneKind = "spawn"; inlineSceneIndex = 0; SetRightTab("Scene"); }),
+            ("Transitions", () => { inlineSceneKind = "transition"; inlineSceneIndex = 0; SetRightTab("Scene"); }),
+            ("Environment", () => { inlineSceneKind = "environment"; inlineSceneIndex = 0; SetRightTab("Scene"); }),
+            ("Waterboxes", () => { inlineSceneKind = "waterbox"; inlineSceneIndex = 0; SetRightTab("Scene"); }));
+        if (inlineSceneKind == "settings")
+        {
+            var settings = scene.Settings ?? new RomSceneSettings(0, 0); var panel = new LinearLayout(this) { Orientation = Orientation.Vertical };
+            var camera = NumberEditor(panel, "Camera movement", settings.CameraMovement.ToString(CultureInfo.InvariantCulture)); var world = NumberEditor(panel, "World map", settings.WorldMap.ToString(CultureInfo.InvariantCulture));
+            rightToolContent.AddView(panel, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
+            AddPanelButton(rightToolContent, "Apply scene settings", () => { try { if (romWorkspace is null) throw new InvalidOperationException("Open a ROM before staging scene edits."); romWorkspace.EditSceneSettings(scene.Id, new RomSceneSettings((byte)ParseInt(camera), (byte)ParseInt(world))); status.Text = "Native scene settings edit staged."; RefreshInlineScene(scene.Id); } catch (Exception error) { ShowError(error); } });
+            return;
+        }
+        var records = inlineSceneKind switch { "spawn" => scene.SpawnPoints?.Count ?? 0, "transition" => scene.Transitions?.Count ?? 0, "environment" => scene.Environments?.Count ?? 0, "waterbox" => scene.Collision?.Waterboxes?.Count ?? 0, _ => 0 };
+        if (records == 0) { rightToolContent.AddView(new TextView(this) { Text = "No decoded records of this type are present in the scene." }); return; }
+        inlineSceneIndex = Math.Clamp(inlineSceneIndex, 0, records - 1);
+        var indexEditor = NumberEditor(rightToolContent, "Record index", inlineSceneIndex.ToString(CultureInfo.InvariantCulture));
+        AddToolbar(rightToolContent, ("Previous", () => { inlineSceneIndex = Math.Max(0, inlineSceneIndex - 1); SetRightTab("Scene"); }), ("Next", () => { inlineSceneIndex = Math.Min(records - 1, inlineSceneIndex + 1); SetRightTab("Scene"); }), ("Load index", () => { try { inlineSceneIndex = Math.Clamp(ParseInt(indexEditor), 0, records - 1); SetRightTab("Scene"); } catch (Exception error) { ShowError(error); } }));
+        var panelFields = new LinearLayout(this) { Orientation = Orientation.Vertical }; panelFields.SetPadding(Dp(4), Dp(4), Dp(4), Dp(4));
+        if (inlineSceneKind == "spawn")
+        {
+            var value = scene.SpawnPoints![inlineSceneIndex]; var number = NumberEditor(panelFields, "Spawn number", $"0x{value.Number:X4}"); var x = NumberEditor(panelFields, "X", value.X.ToString(CultureInfo.InvariantCulture)); var y = NumberEditor(panelFields, "Y", value.Y.ToString(CultureInfo.InvariantCulture)); var z = NumberEditor(panelFields, "Z", value.Z.ToString(CultureInfo.InvariantCulture)); var rx = NumberEditor(panelFields, "X rotation", value.RotationX.ToString(CultureInfo.InvariantCulture)); var ry = NumberEditor(panelFields, "Y rotation", value.RotationY.ToString(CultureInfo.InvariantCulture)); var rz = NumberEditor(panelFields, "Z rotation", value.RotationZ.ToString(CultureInfo.InvariantCulture)); var variable = NumberEditor(panelFields, "Variable", $"0x{value.Variable:X4}");
+            AddPanelButton(rightToolContent, "Apply spawn", () => { try { if (romWorkspace is null) throw new InvalidOperationException("Open a ROM before staging scene edits."); romWorkspace.EditSpawn(scene.Id, inlineSceneIndex, new RomSpawnPoint((ushort)ParseInt(number), (short)ParseInt(x), (short)ParseInt(y), (short)ParseInt(z), (short)ParseInt(rx), (short)ParseInt(ry), (short)ParseInt(rz), (ushort)ParseInt(variable))); status.Text = $"Spawn {inlineSceneIndex:D2} edit staged."; RefreshInlineScene(scene.Id); } catch (Exception error) { ShowError(error); } });
+        }
+        else if (inlineSceneKind == "transition")
+        {
+            var value = scene.Transitions![inlineSceneIndex]; var fr = NumberEditor(panelFields, "Front room", value.FrontRoom.ToString(CultureInfo.InvariantCulture)); var fc = NumberEditor(panelFields, "Front camera", value.FrontCamera.ToString(CultureInfo.InvariantCulture)); var br = NumberEditor(panelFields, "Back room", value.BackRoom.ToString(CultureInfo.InvariantCulture)); var bc = NumberEditor(panelFields, "Back camera", value.BackCamera.ToString(CultureInfo.InvariantCulture)); var number = NumberEditor(panelFields, "Transition number", $"0x{value.Number:X4}"); var x = NumberEditor(panelFields, "X", value.X.ToString(CultureInfo.InvariantCulture)); var y = NumberEditor(panelFields, "Y", value.Y.ToString(CultureInfo.InvariantCulture)); var z = NumberEditor(panelFields, "Z", value.Z.ToString(CultureInfo.InvariantCulture)); var rotation = NumberEditor(panelFields, "Y rotation", value.RotationY.ToString(CultureInfo.InvariantCulture)); var variable = NumberEditor(panelFields, "Variable", $"0x{value.Variable:X4}");
+            AddPanelButton(rightToolContent, "Apply transition", () => { try { if (romWorkspace is null) throw new InvalidOperationException("Open a ROM before staging scene edits."); romWorkspace.EditTransition(scene.Id, inlineSceneIndex, new RomTransition((byte)ParseInt(fr), (byte)ParseInt(fc), (byte)ParseInt(br), (byte)ParseInt(bc), (ushort)ParseInt(number), (short)ParseInt(x), (short)ParseInt(y), (short)ParseInt(z), (short)ParseInt(rotation), (ushort)ParseInt(variable))); status.Text = $"Transition {inlineSceneIndex:D2} edit staged."; RefreshInlineScene(scene.Id); } catch (Exception error) { ShowError(error); } });
+        }
+        else if (inlineSceneKind == "environment")
+        {
+            var value = scene.Environments![inlineSceneIndex]; var ambient = NumberEditor(panelFields, "Ambient (hex)", $"0x{value.Ambient:X6}"); var diffuse0 = NumberEditor(panelFields, "Diffuse 0 (hex)", $"0x{value.Diffuse0:X6}"); var direction0 = NumberEditor(panelFields, "Direction 0 (hex)", $"0x{value.Direction0:X6}"); var diffuse1 = NumberEditor(panelFields, "Diffuse 1 (hex)", $"0x{value.Diffuse1:X6}"); var direction1 = NumberEditor(panelFields, "Direction 1 (hex)", $"0x{value.Direction1:X6}"); var fog = NumberEditor(panelFields, "Fog color (hex)", $"0x{value.FogColor:X6}"); var fogDistance = NumberEditor(panelFields, "Fog distance", value.FogDistance.ToString(CultureInfo.InvariantCulture)); var fogUnknown = NumberEditor(panelFields, "Fog unknown", value.FogUnknown.ToString(CultureInfo.InvariantCulture)); var draw = NumberEditor(panelFields, "Draw distance", value.DrawDistance.ToString(CultureInfo.InvariantCulture));
+            AddPanelButton(rightToolContent, "Apply environment", () => { try { if (romWorkspace is null) throw new InvalidOperationException("Open a ROM before staging scene edits."); romWorkspace.EditEnvironment(scene.Id, inlineSceneIndex, new RomEnvironment((uint)ParseUInt64(ambient), (uint)ParseUInt64(diffuse0), (uint)ParseUInt64(direction0), (uint)ParseUInt64(diffuse1), (uint)ParseUInt64(direction1), (uint)ParseUInt64(fog), (ushort)ParseInt(fogDistance), (ushort)ParseInt(fogUnknown), (ushort)ParseInt(draw))); status.Text = $"Environment {inlineSceneIndex:D2} edit staged."; RefreshInlineScene(scene.Id); } catch (Exception error) { ShowError(error); } });
+        }
+        else
+        {
+            var value = scene.Collision!.Waterboxes![inlineSceneIndex]; var x = NumberEditor(panelFields, "X", value.X.ToString(CultureInfo.InvariantCulture)); var y = NumberEditor(panelFields, "Y", value.Y.ToString(CultureInfo.InvariantCulture)); var z = NumberEditor(panelFields, "Z", value.Z.ToString(CultureInfo.InvariantCulture)); var xs = NumberEditor(panelFields, "X size", value.XSize.ToString(CultureInfo.InvariantCulture)); var zs = NumberEditor(panelFields, "Z size", value.ZSize.ToString(CultureInfo.InvariantCulture)); var unknown = NumberEditor(panelFields, "Unknown", value.Unknown.ToString(CultureInfo.InvariantCulture)); var properties = NumberEditor(panelFields, "Properties (hex)", $"0x{value.Properties:X8}");
+            AddPanelButton(rightToolContent, "Apply waterbox", () => { try { if (romWorkspace is null) throw new InvalidOperationException("Open a ROM before staging scene edits."); romWorkspace.EditWaterbox(scene.Id, inlineSceneIndex, new RomWaterbox((short)ParseInt(x), (short)ParseInt(y), (short)ParseInt(z), (short)ParseInt(xs), (short)ParseInt(zs), (ushort)ParseInt(unknown), (uint)ParseUInt64(properties))); status.Text = $"Waterbox {inlineSceneIndex:D2} edit staged."; RefreshInlineScene(scene.Id); } catch (Exception error) { ShowError(error); } });
+        }
+        rightToolContent.AddView(panelFields, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
+    }
+
+    private void RefreshInlineScene(int sceneId)
+    {
+        if (romWorkspace is null) return;
+        var current = romWorkspace.Document.Scenes.First(item => item.Id == sceneId); RefreshSceneBrowser(); SetRightTab("Scene");
+        if (selectedRoomId >= 0 && current.Rooms.FirstOrDefault(item => item.Id == selectedRoomId) is { } room) OpenRoomInViewport(current, room);
+    }
+
+    private void AddInlineRoomInspector(RomScene? scene, RomRoom? room)
+    {
+        AddSectionHeader(rightToolContent, "INLINE ROOM WORKSPACE");
+        if (scene is null || room is null) { rightToolContent.AddView(new TextView(this) { Text = "Select a scene and room to edit settings, objects, and exits here." }); return; }
+        AddToolbar(rightToolContent,
+            ("Settings", () => { inlineRoomKind = "settings"; inlineRoomIndex = 0; SetRightTab("Room"); }),
+            ("Objects", () => { inlineRoomKind = "object"; inlineRoomIndex = 0; SetRightTab("Room"); }),
+            ("Exits", () => { inlineRoomKind = "exit"; inlineRoomIndex = 0; SetRightTab("Room"); }));
+        var panel = new LinearLayout(this) { Orientation = Orientation.Vertical }; panel.SetPadding(Dp(4), Dp(4), Dp(4), Dp(4));
+        if (inlineRoomKind == "settings")
+        {
+            var value = room.Settings ?? new RomRoomSettings(0, 0, 0, 0, 0, 0); var behavior = NumberEditor(panel, "Behavior (hex)", $"0x{value.Behavior:X8}"); var wind = NumberEditor(panel, "Wind (hex)", $"0x{value.Wind:X8}"); var start = NumberEditor(panel, "Start time", value.StartTime.ToString(CultureInfo.InvariantCulture)); var speed = NumberEditor(panel, "Time speed", value.TimeSpeed.ToString(CultureInfo.InvariantCulture)); var skybox = NumberEditor(panel, "Skybox flags", value.SkyboxFlags.ToString(CultureInfo.InvariantCulture)); var echo = NumberEditor(panel, "Echo", value.Echo.ToString(CultureInfo.InvariantCulture));
+            rightToolContent.AddView(panel, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent)); AddPanelButton(rightToolContent, "Apply room settings", () => { try { if (romWorkspace is null) throw new InvalidOperationException("Open a ROM before staging room edits."); romWorkspace.EditRoomSettings(scene.Id, room.Id, new RomRoomSettings((uint)ParseUInt64(behavior), (uint)ParseUInt64(wind), (ushort)ParseInt(start), (byte)ParseInt(speed), (byte)ParseInt(skybox), (byte)ParseInt(echo))); status.Text = "Native room settings edit staged."; RefreshInlineRoom(scene.Id, room.Id); } catch (Exception error) { ShowError(error); } }); return;
+        }
+        int total = inlineRoomKind == "object" ? room.Objects?.Count ?? 0 : room.Exits?.Count ?? 0; if (total == 0) { rightToolContent.AddView(new TextView(this) { Text = "No decoded records of this type are present in the room." }); return; }
+        inlineRoomIndex = Math.Clamp(inlineRoomIndex, 0, total - 1); var indexEditor = NumberEditor(rightToolContent, "Record index", inlineRoomIndex.ToString(CultureInfo.InvariantCulture)); AddToolbar(rightToolContent, ("Previous", () => { inlineRoomIndex = Math.Max(0, inlineRoomIndex - 1); SetRightTab("Room"); }), ("Next", () => { inlineRoomIndex = Math.Min(total - 1, inlineRoomIndex + 1); SetRightTab("Room"); }), ("Load index", () => { try { inlineRoomIndex = Math.Clamp(ParseInt(indexEditor), 0, total - 1); SetRightTab("Room"); } catch (Exception error) { ShowError(error); } }));
+        if (inlineRoomKind == "object")
+        {
+            var value = room.Objects![inlineRoomIndex]; var objectId = NumberEditor(panel, "Object ID (hex)", $"0x{value:X4}"); AddPanelButton(rightToolContent, "Apply object", () => { try { if (romWorkspace is null) throw new InvalidOperationException("Open a ROM before staging room edits."); romWorkspace.EditRoomObject(scene.Id, room.Id, inlineRoomIndex, (ushort)ParseUInt64(objectId)); status.Text = $"Object {inlineRoomIndex:D2} edit staged."; RefreshInlineRoom(scene.Id, room.Id); } catch (Exception error) { ShowError(error); } });
+        }
+        else
+        {
+            var value = room.Exits![inlineRoomIndex]; var raw = NumberEditor(panel, "Exit raw (hex)", $"0x{value:X4}"); AddPanelButton(rightToolContent, "Apply room exit", () => { try { if (romWorkspace is null) throw new InvalidOperationException("Open a ROM before staging room edits."); romWorkspace.EditRoomExit(scene.Id, room.Id, inlineRoomIndex, (ushort)ParseUInt64(raw)); status.Text = $"Room exit {inlineRoomIndex:D2} edit staged."; RefreshInlineRoom(scene.Id, room.Id); } catch (Exception error) { ShowError(error); } });
+        }
+        rightToolContent.AddView(panel, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
+    }
+
+    private void RefreshInlineRoom(int sceneId, int roomId)
+    {
+        if (romWorkspace is null) return; var current = romWorkspace.Document.Scenes.First(item => item.Id == sceneId); if (current.Rooms.FirstOrDefault(item => item.Id == roomId) is { } room) OpenRoomInViewport(current, room); SetRightTab("Room");
     }
 
     private void AddInlineActorInspector(RomScene? scene, RomRoom? room)
