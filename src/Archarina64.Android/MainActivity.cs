@@ -22,6 +22,12 @@ public sealed class MainActivity : Activity
     private RoomViewport viewport = null!;
     private TextView status = null!, inspector = null!;
     private ListView rooms = null!;
+    private ListView sceneList = null!, nativeRoomList = null!;
+    private LinearLayout leftPanel = null!, rightPanel = null!, editorChrome = null!;
+    private TextView sceneTitle = null!, roomTitle = null!, documentTitle = null!;
+    private Button restoreChrome = null!;
+    private int selectedSceneId = -1, selectedRoomId = -1;
+    private bool leftPanelVisible = true, rightPanelVisible;
     private LinearLayout pageRoot = null!;
     private readonly List<View> chromeViews = [];
     private Button fullscreenToggle = null!;
@@ -31,6 +37,7 @@ public sealed class MainActivity : Activity
     private int selected = -1;
     private readonly HashSet<(int SceneId, int RoomId, int ActorIndex)> selectedActorKeys = [];
     private bool actorSelectionMode;
+    private bool actorOverlayEnabled;
     private bool collisionOverlayEnabled;
     private bool collisionTriangleOverlayEnabled;
     private bool geometryOverlayEnabled;
@@ -53,42 +60,79 @@ public sealed class MainActivity : Activity
         var root = new LinearLayout(this) { Orientation = Orientation.Vertical };
         pageRoot = root;
         root.SetBackgroundColor(Color.Rgb(14, 19, 28));
-        root.SetPadding(Dp(12), Dp(8), Dp(12), Dp(8));
-        root.SetOnApplyWindowInsetsListener(new InsetsListener(Dp(12)));
-        var title = new TextView(this) { Text = "ARCHARINA64  /  ANDROID", TextSize = 21 };
-        title.SetTextColor(Color.Rgb(88, 222, 189));
-        root.AddView(title);
-        chromeViews.Add(title);
-        status = new TextView(this) { TextSize = 12, Text = "Early port • geometry preview • drag to orbit, pinch to zoom" };
-        status.SetTextColor(Color.Rgb(191, 203, 218)); root.AddView(status); chromeViews.Add(status);
-        fullscreenToggle = new Button(this) { Text = "Fullscreen viewport", TextSize = 12 };
-        fullscreenToggle.SetAllCaps(false); fullscreenToggle.Click += (_, _) => ToggleViewportFullscreen(); root.AddView(fullscreenToggle);
-        AddSectionHeader(root, "ROM PROJECT");
-        AddToolbar(root, ("Open ROM", () => Pick(ImportRom)), ("Open project", () => Pick(ImportProject)), ("SO Workspace", ShowRomWorkspace), ("Verify", VerifyEditedRom), ("Export ROM", ExportEditedRom), ("Patch", ExportRomPatch), ("Export project", ExportProject));
-        AddSectionHeader(root, "SCENE WORKSPACE");
-        AddToolbar(root, ("Gameplay", Gameplay), ("Room catalog", () => Pick(ImportCatalog)), ("Import tile", () => Pick(ImportTile)), ("Help", Help));
-        AddSectionHeader(root, "SO TOOL TABS");
-        AddToolbar(root, ("General", () => OpenSoCategory("General / scene settings")), ("Scene", () => OpenSoCategory("Scenes and rooms")), ("Room", () => OpenSoCategory("Scenes and rooms")), ("Actors", () => OpenSoCategory("Actors and objects")), ("Collision", () => OpenSoCategory("Collision and cameras")), ("Geometry", () => OpenSoCategory("Geometry and materials")), ("Commands", () => OpenSoCategory("Commands and alternate headers")), ("Tools", () => OpenSoCategory("Export and verification")));
+        root.SetOnApplyWindowInsetsListener(new InsetsListener(0));
+        editorChrome = new LinearLayout(this) { Orientation = Orientation.Vertical };
+        editorChrome.SetBackgroundColor(Color.Rgb(28, 35, 47));
+        AddToolbar(editorChrome, ("File", () => ShowTopMenu("File")), ("Edit", () => ShowTopMenu("Edit")), ("Extra", () => ShowTopMenu("Extra")), ("Window", () => ShowTopMenu("Window")), ("View", () => ShowTopMenu("View")), ("Scene", () => ShowTopMenu("Scene")), ("Room", () => ShowTopMenu("Room")), ("Actors", () => ShowTopMenu("Actors")), ("Collision", () => ShowTopMenu("Collision")), ("Geometry", () => ShowTopMenu("Geometry")));
+        var quick = new LinearLayout(this) { Orientation = Orientation.Horizontal };
+        quick.SetGravity(GravityFlags.CenterVertical);
+        quick.AddView(CompactButton("☰", () => SetLeftPanel(!leftPanelVisible)), new LinearLayout.LayoutParams(Dp(46), Dp(46)));
+        quick.AddView(CompactButton("Open ROM", () => Pick(ImportRom)), new LinearLayout.LayoutParams(Dp(100), Dp(46)));
+        documentTitle = new TextView(this) { Text = "No ROM loaded", TextSize = 13, Gravity = GravityFlags.CenterVertical };
+        documentTitle.SetSingleLine(true); documentTitle.Ellipsize = global::Android.Text.TextUtils.TruncateAt.End;
+        documentTitle.SetTextColor(Color.White);
+        quick.AddView(documentTitle, new LinearLayout.LayoutParams(0, Dp(46), 1));
+        quick.AddView(CompactButton("Tools", () => SetRightPanel(!rightPanelVisible)), new LinearLayout.LayoutParams(Dp(64), Dp(46)));
+        fullscreenToggle = CompactButton("⛶", ToggleViewportFullscreen);
+        quick.AddView(fullscreenToggle, new LinearLayout.LayoutParams(Dp(46), Dp(46)));
+        editorChrome.AddView(quick); root.AddView(editorChrome);
         viewport = new RoomViewport(this);
         viewportFrame = new FrameLayout(this);
         viewportFrame.AddView(viewport, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.MatchParent));
         actorOverlay = new FrameLayout(this);
         viewportFrame.AddView(actorOverlay, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.MatchParent));
-        root.AddView(viewportFrame, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, 0, 1));
-        inspector = new TextView(this) { TextSize = 13 }; inspector.SetTextColor(Color.White); root.AddView(inspector);
-        chromeViews.Add(inspector);
-        AddSectionHeader(root, "MOBILE VIEWPORT");
-        AddToolbar(root, ("Rotate 90°", () => Edit(t => t with { QuarterTurns = (t.QuarterTurns + 1) % 4 })),
-            ("X −", () => Move(-1, 0)), ("X +", () => Move(1, 0)), ("Z −", () => Move(0, -1)), ("Z +", () => Move(0, 1)),
-            ("Snap", SnapSelected), ("Remove", Remove));
-        AddSectionHeader(root, "LAYOUT TOOLS");
-        AddToolbar(root, ("Undo", () => { history.Undo(); Changed(); }), ("Redo", () => { history.Redo(); Changed(); }),
-            ("Save", () => { LayoutStorage.SaveAtomic(SavePath, history.Current); status.Text = "Layout saved on this device."; }),
-            ("Reset view", () => viewport.ResetCamera()), ("Add demo", () => AddTile(DemoRoom.Create())), ("Open layout", () => Pick(OpenLayout)), ("Export layout", Export));
+        int panelWidth = Math.Min(Dp(300), (int)(Resources!.DisplayMetrics!.WidthPixels * 0.76f));
+        leftPanel = new LinearLayout(this) { Orientation = Orientation.Vertical };
+        leftPanel.SetBackgroundColor(Color.Rgb(25, 33, 44));
+        leftPanel.SetPadding(Dp(8), Dp(6), Dp(8), Dp(6));
+        var leftHeader = new LinearLayout(this) { Orientation = Orientation.Horizontal };
+        sceneTitle = new TextView(this) { Text = "Scenes", TextSize = 17, Gravity = GravityFlags.CenterVertical };
+        sceneTitle.SetTextColor(Color.Rgb(88, 222, 189)); leftHeader.AddView(sceneTitle, new LinearLayout.LayoutParams(0, Dp(44), 1));
+        leftHeader.AddView(CompactButton("×", () => SetLeftPanel(false)), new LinearLayout.LayoutParams(Dp(44), Dp(44)));
+        leftPanel.AddView(leftHeader);
+        sceneList = new ListView(this) { ChoiceMode = ChoiceMode.Single };
+        sceneList.ItemClick += (_, e) => { var current = romWorkspace?.Document ?? rom; if (current is not null && e.Position < current.Scenes.Count) OpenSceneInViewport(current.Scenes[e.Position]); };
+        leftPanel.AddView(sceneList, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, 0, 1));
+        roomTitle = new TextView(this) { Text = "Rooms", TextSize = 15 };
+        roomTitle.SetTextColor(Color.Rgb(88, 222, 189)); roomTitle.SetPadding(Dp(4), Dp(8), 0, Dp(4)); leftPanel.AddView(roomTitle);
+        nativeRoomList = new ListView(this) { ChoiceMode = ChoiceMode.Single };
+        nativeRoomList.ItemClick += (_, e) => { var scene = CurrentScene(); if (scene is not null && e.Position < scene.Rooms.Count) OpenRoomInViewport(scene, scene.Rooms[e.Position]); };
+        leftPanel.AddView(nativeRoomList, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, 0, 1));
         rooms = new ListView(this) { ChoiceMode = ChoiceMode.Single };
         rooms.ItemClick += (_, e) => { selected = e.Position; Refresh(); };
-        root.AddView(rooms, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, Dp(96)));
-        chromeViews.Add(rooms);
+        leftPanel.AddView(rooms, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, 0, 1));
+        viewportFrame.AddView(leftPanel, new FrameLayout.LayoutParams(panelWidth, ViewGroup.LayoutParams.MatchParent, GravityFlags.Left));
+        rightPanel = new LinearLayout(this) { Orientation = Orientation.Vertical };
+        rightPanel.SetBackgroundColor(Color.Rgb(25, 33, 44));
+        rightPanel.SetPadding(Dp(8), Dp(6), Dp(8), Dp(6));
+        var rightHeader = new LinearLayout(this) { Orientation = Orientation.Horizontal };
+        var toolTitle = new TextView(this) { Text = "Inspector & tools", TextSize = 17, Gravity = GravityFlags.CenterVertical };
+        toolTitle.SetTextColor(Color.Rgb(88, 222, 189)); rightHeader.AddView(toolTitle, new LinearLayout.LayoutParams(0, Dp(44), 1));
+        rightHeader.AddView(CompactButton("×", () => SetRightPanel(false)), new LinearLayout.LayoutParams(Dp(44), Dp(44)));
+        rightPanel.AddView(rightHeader);
+        var toolScroll = new ScrollView(this); var toolContent = new LinearLayout(this) { Orientation = Orientation.Vertical };
+        inspector = new TextView(this) { TextSize = 13 }; inspector.SetTextColor(Color.White); inspector.SetPadding(Dp(6), Dp(8), Dp(6), Dp(12)); toolContent.AddView(inspector);
+        AddPanelButton(toolContent, "Scene properties", () => WithScene(ShowRomScene));
+        AddPanelButton(toolContent, "Room properties", () => WithRoom(ShowRomRoom));
+        AddPanelButton(toolContent, "Actors & objects", () => WithRoom(ShowRomRoom));
+        AddPanelButton(toolContent, "Show/hide actor gizmos", ToggleActorGizmos);
+        AddPanelButton(toolContent, "Collision & cameras", () => WithScene(ShowRomCollisionVertices));
+        AddPanelButton(toolContent, "Geometry & materials", () => WithRoom(ShowRomGeometryVertices));
+        AddPanelButton(toolContent, "Scene commands", () => WithScene(ShowRomSceneCommands));
+        AddPanelButton(toolContent, "Gameplay", Gameplay);
+        AddPanelButton(toolContent, "Verify ROM", VerifyEditedRom);
+        AddPanelButton(toolContent, "Export ROM", ExportEditedRom);
+        AddPanelButton(toolContent, "Import tile", () => Pick(ImportTile));
+        toolScroll.AddView(toolContent); rightPanel.AddView(toolScroll, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, 0, 1));
+        viewportFrame.AddView(rightPanel, new FrameLayout.LayoutParams(panelWidth, ViewGroup.LayoutParams.MatchParent, GravityFlags.Right));
+        restoreChrome = CompactButton("Show editor", ToggleViewportFullscreen);
+        var restoreLayout = new FrameLayout.LayoutParams(Dp(112), Dp(44), GravityFlags.Top | GravityFlags.Right);
+        restoreLayout.SetMargins(0, Dp(8), Dp(8), 0); viewportFrame.AddView(restoreChrome, restoreLayout);
+        restoreChrome.Visibility = ViewStates.Gone;
+        root.AddView(viewportFrame, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, 0, 1));
+        status = new TextView(this) { TextSize = 11, Text = "Open a ROM to browse scenes. Drag to orbit; pinch to zoom." };
+        status.SetSingleLine(true); status.Ellipsize = global::Android.Text.TextUtils.TruncateAt.End;
+        status.SetTextColor(Color.Rgb(191, 203, 218)); status.SetPadding(Dp(8), Dp(2), Dp(8), Dp(2)); root.AddView(status);
         SetContentView(root);
         try { actorDatabase = ActorMetadataDatabase.LoadOoT(); } catch { actorDatabase = null; }
         try
@@ -98,6 +142,8 @@ public sealed class MainActivity : Activity
             selected = savedInstanceState?.GetInt("selected", 0) ?? 0;
         }
         catch (Exception error) { ShowError(error); }
+        SetLeftPanel(true);
+        SetRightPanel(false);
         Refresh();
     }
 
@@ -124,12 +170,126 @@ public sealed class MainActivity : Activity
         header.SetPadding(Dp(4), Dp(8), Dp(4), Dp(2)); root.AddView(header); if (ReferenceEquals(root, pageRoot)) chromeViews.Add(header);
     }
 
+    private Button CompactButton(string label, Action action)
+    {
+        var button = new Button(this) { Text = label, TextSize = 12 };
+        button.SetAllCaps(false); button.SetPadding(Dp(2), 0, Dp(2), 0);
+        button.Click += (_, _) => { if (busy) return; try { action(); } catch (Exception error) { ShowError(error); } };
+        return button;
+    }
+
+    private void AddPanelButton(LinearLayout panel, string label, Action action)
+        => panel.AddView(CompactButton(label, action), new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, Dp(48)));
+
+    private void SetLeftPanel(bool visible)
+    {
+        leftPanelVisible = visible;
+        leftPanel.Visibility = visible && !viewportFullscreen ? ViewStates.Visible : ViewStates.Gone;
+        if (visible && Resources!.DisplayMetrics!.WidthPixels < Dp(700)) SetRightPanel(false);
+    }
+
+    private void SetRightPanel(bool visible)
+    {
+        rightPanelVisible = visible;
+        rightPanel.Visibility = visible && !viewportFullscreen ? ViewStates.Visible : ViewStates.Gone;
+        if (visible && Resources!.DisplayMetrics!.WidthPixels < Dp(700)) SetLeftPanel(false);
+    }
+
     private void ToggleViewportFullscreen()
     {
         viewportFullscreen = !viewportFullscreen;
-        foreach (var view in chromeViews) view.Visibility = viewportFullscreen ? ViewStates.Gone : ViewStates.Visible;
-        fullscreenToggle.Text = viewportFullscreen ? "Show SO tools" : "Fullscreen viewport";
-        status.Text = viewportFullscreen ? "Viewport fullscreen • tap Show SO tools to restore the Sharp Ocarina panels." : "Sharp Ocarina panels restored.";
+        editorChrome.Visibility = viewportFullscreen ? ViewStates.Gone : ViewStates.Visible;
+        status.Visibility = viewportFullscreen ? ViewStates.Gone : ViewStates.Visible;
+        leftPanel.Visibility = !viewportFullscreen && leftPanelVisible ? ViewStates.Visible : ViewStates.Gone;
+        rightPanel.Visibility = !viewportFullscreen && rightPanelVisible ? ViewStates.Visible : ViewStates.Gone;
+        restoreChrome.Visibility = viewportFullscreen ? ViewStates.Visible : ViewStates.Gone;
+    }
+
+    private RomScene? CurrentScene() => (romWorkspace?.Document ?? rom)?.Scenes.FirstOrDefault(s => s.Id == selectedSceneId);
+    private RomRoom? CurrentRoom() => CurrentScene()?.Rooms.FirstOrDefault(r => r.Id == selectedRoomId);
+    private void WithScene(Action<RomScene> action)
+    {
+        var scene = CurrentScene(); if (scene is null) { SetLeftPanel(true); status.Text = "Choose a scene from the left panel first."; return; }
+        action(scene);
+    }
+    private void WithRoom(Action<RomScene, RomRoom> action)
+    {
+        var scene = CurrentScene(); var room = CurrentRoom(); if (scene is null || room is null) { SetLeftPanel(true); status.Text = "Choose a scene and room from the left panel first."; return; }
+        action(scene, room);
+    }
+
+    private void ShowTopMenu(string name)
+    {
+        (string Label, Action Run)[] actions = name switch
+        {
+            "File" => [("Open ROM", () => Pick(ImportRom)), ("Open project", () => Pick(ImportProject)), ("Open layout", () => Pick(OpenLayout)), ("Save layout", () => { LayoutStorage.SaveAtomic(SavePath, history.Current); status.Text = "Layout saved."; }), ("Verify ROM", VerifyEditedRom), ("Export ROM", ExportEditedRom), ("Export patch", ExportRomPatch), ("Export project", ExportProject), ("Export layout", Export)],
+            "Edit" => [("Undo layout", () => { history.Undo(); Changed(); }), ("Redo layout", () => { history.Redo(); Changed(); }), ("Scene properties", () => WithScene(ShowRomScene)), ("Room properties", () => WithRoom(ShowRomRoom))],
+            "Extra" => [("Sharp Ocarina workspace", ShowRomWorkspace), ("Actor database", ShowActorBrowser), ("Gameplay", Gameplay), ("Room catalog", () => Pick(ImportCatalog)), ("Import tile", () => Pick(ImportTile)), ("Help", Help)],
+            "Window" => [(leftPanelVisible ? "Hide scenes panel" : "Show scenes panel", () => SetLeftPanel(!leftPanelVisible)), (rightPanelVisible ? "Hide tools panel" : "Show tools panel", () => SetRightPanel(!rightPanelVisible)), ("Fullscreen viewport", ToggleViewportFullscreen)],
+            "View" => [("Reset camera", () => viewport.ResetCamera()), ("Toggle geometry", () => WithRoom(ToggleNativeGeometry)), ("Toggle collision", () => WithRoom(ToggleNativeCollision)), ("Show/hide actor gizmos", ToggleActorGizmos), ("Fullscreen viewport", ToggleViewportFullscreen)],
+            "Scene" => [("Scene browser", () => SetLeftPanel(true)), ("Scene properties", () => WithScene(ShowRomScene)), ("Scene order", ShowSceneOrder), ("Entrances", ShowEntrances), ("Commands", () => WithScene(ShowRomSceneCommands))],
+            "Room" => [("Room browser", () => SetLeftPanel(true)), ("Room properties", () => WithRoom(ShowRomRoom)), ("Room order", () => WithScene(ShowRoomOrder)), ("Room settings", () => WithRoom(EditNativeRoomSettings)), ("Import geometry", () => WithRoom(ImportNativeGeometry))],
+            "Actors" => [("Actors in room", () => WithRoom(ShowRomRoom)), ("Actor database", ShowActorBrowser), ("Spawns", () => WithScene(ShowRomSpawns)), ("Transitions", () => WithScene(ShowRomTransitions))],
+            "Collision" => [("Collision vertices and cameras", () => WithScene(ShowRomCollisionVertices)), ("Waterboxes", () => WithScene(ShowRomWaterboxes))],
+            _ => [("Geometry vertices", () => WithRoom(ShowRomGeometryVertices)), ("Import geometry", () => WithRoom(ImportNativeGeometry)), ("Split room into tiles", () => WithRoom(AddRomRoomTile))]
+        };
+        new AlertDialog.Builder(this)!.SetTitle(name)!.SetItems(actions.Select(a => a.Label).ToArray(), (_, e) => { try { actions[e.Which].Run(); } catch (Exception error) { ShowError(error); } })!.Show();
+    }
+
+    private void RefreshSceneBrowser()
+    {
+        var current = romWorkspace?.Document ?? rom;
+        bool hasRom = current is not null;
+        sceneList.Visibility = hasRom ? ViewStates.Visible : ViewStates.Gone;
+        nativeRoomList.Visibility = hasRom ? ViewStates.Visible : ViewStates.Gone;
+        roomTitle.Visibility = hasRom ? ViewStates.Visible : ViewStates.Gone;
+        rooms.Visibility = hasRom ? ViewStates.Gone : ViewStates.Visible;
+        sceneTitle.Text = hasRom ? $"Scenes · {current!.Scenes.Count}" : "Layout rooms";
+        documentTitle.Text = hasRom ? $"{current!.Profile.Name} · Scene {(selectedSceneId < 0 ? "—" : selectedSceneId.ToString("X2"))}" : "No ROM loaded";
+        if (!hasRom) return;
+        var scenes = current!.Scenes;
+        sceneList.Adapter = new ArrayAdapter<string>(this, global::Android.Resource.Layout.SimpleListItemActivated1, scenes.Select(s => $"{s.Id:X2}  {s.Name}  ·  {s.Rooms.Count} rooms").ToArray());
+        int scenePosition = scenes.ToList().FindIndex(s => s.Id == selectedSceneId);
+        if (scenePosition >= 0) sceneList.SetItemChecked(scenePosition, true);
+        var scene = CurrentScene();
+        roomTitle.Text = scene is null ? "Choose a scene" : $"Rooms · Scene {scene.Id:X2}";
+        nativeRoomList.Adapter = new ArrayAdapter<string>(this, global::Android.Resource.Layout.SimpleListItemActivated1, (scene?.Rooms ?? []).Select(r => $"Room {r.Id:D2}  ·  {r.Actors.Count} actors  ·  {r.Geometry?.Triangles.Count ?? 0} triangles").ToArray());
+        if (scene is not null) { int roomPosition = scene.Rooms.ToList().FindIndex(r => r.Id == selectedRoomId); if (roomPosition >= 0) nativeRoomList.SetItemChecked(roomPosition, true); }
+    }
+
+    private void OpenSceneInViewport(RomScene scene)
+    {
+        selectedSceneId = scene.Id; selectedRoomId = -1;
+        if (scene.Rooms.Count > 0) OpenRoomInViewport(scene, scene.Rooms.FirstOrDefault(r => r.Geometry?.Triangles.Count > 0) ?? scene.Rooms[0]);
+        else { actorOverlay.RemoveAllViews(); viewport.ShowNativeRoom(null, scene.Collision, false, nativeCollisionVisible); inspector.Text = $"Scene {scene.Id:X2} · {scene.Name}\nNo rooms decoded. Use Scene properties for metadata."; RefreshSceneBrowser(); }
+        status.Text = $"Scene {scene.Id:X2} · {scene.Name} opened from ROM.";
+    }
+
+    private void OpenRoomInViewport(RomScene scene, RomRoom room)
+    {
+        selectedSceneId = scene.Id; selectedRoomId = room.Id;
+        viewport.ShowNativeRoom(room.Geometry, scene.Collision, nativeGeometryVisible, nativeCollisionVisible);
+        ShowActorOverlay(scene, room);
+        inspector.Text = $"Scene {scene.Id:X2} · {scene.Name}\nRoom {room.Id:D2} · {room.Actors.Count} actors · {room.ObjectCount} objects\nGeometry: {room.Geometry?.Triangles.Count ?? 0} triangles · Collision: {scene.Collision?.Triangles.Count ?? 0} triangles";
+        RefreshSceneBrowser();
+        status.Text = $"Scene {scene.Id:X2} / Room {room.Id:D2} · drag to orbit, pinch to zoom.";
+    }
+
+    private void SelectDefaultRomScene()
+    {
+        var current = romWorkspace?.Document ?? rom;
+        if (current is null) return;
+        var scene = current.Scenes.FirstOrDefault(s => s.Rooms.Any(r => r.Geometry?.Triangles.Count > 0)) ?? current.Scenes.FirstOrDefault(s => s.Rooms.Count > 0) ?? current.Scenes.FirstOrDefault();
+        if (scene is not null) OpenSceneInViewport(scene); else RefreshSceneBrowser();
+        SetLeftPanel(true);
+    }
+
+    private void ToggleActorGizmos()
+    {
+        actorOverlayEnabled = !actorOverlayEnabled;
+        var scene = CurrentScene(); var room = CurrentRoom();
+        if (scene is not null && room is not null) ShowActorOverlay(scene, room);
+        status.Text = actorOverlayEnabled ? "Actor gizmos visible; drag a marker to move it." : "Actor gizmos hidden.";
     }
 
     private void Pick(int request)
@@ -325,7 +485,7 @@ public sealed class MainActivity : Activity
             if (requestCode == ImportProject)
             {
                 byte[] projectBytes = await LayoutStorage.ReadBoundedBytesAsync(input); var imported = JsonSerializer.Deserialize<RomDocument>(projectBytes) ?? throw new InvalidDataException("Project snapshot is empty or invalid.");
-                rom = imported; romWorkspace = new RomWorkspace(imported); loadedRomBytes = null; ShowRomScenes(); status.Text = $"Loaded project snapshot: {imported.Scenes.Count} scenes and {imported.Scenes.Sum(s => s.Rooms.Count)} rooms. Reopen the source ROM before native ROM export."; return;
+                rom = imported; romWorkspace = new RomWorkspace(imported); loadedRomBytes = null; SelectDefaultRomScene(); status.Text = $"Loaded project snapshot: {imported.Scenes.Count} scenes and {imported.Scenes.Sum(s => s.Rooms.Count)} rooms. Reopen the source ROM before native ROM export."; return;
             }
             if (requestCode == ImportRom)
             {
@@ -333,7 +493,7 @@ public sealed class MainActivity : Activity
                 loadedRomBytes = romBytes;
                 rom = await Task.Run(() => RomDecoder.Read(romBytes));
                 romWorkspace = new RomWorkspace(rom);
-                ShowRomScenes();
+                SelectDefaultRomScene();
                 status.Text = $"Decoded {rom.Scenes.Count} scenes from {rom.Profile.Name}; {rom.Scenes.Sum(s => s.Rooms.Count)} rooms and {rom.Scenes.Sum(s => s.Rooms.Sum(r => r.Actors.Count))} actors available for native editing.";
                 return;
             }
@@ -375,10 +535,8 @@ public sealed class MainActivity : Activity
 
     private void ShowRomScenes()
     {
-        var current = romWorkspace?.Document ?? rom; if (current is null) return;
-        var flags = actorDatabase?.AnalyzeFlags(current) ?? [];
-        string[] labels = current.Scenes.Select(s => $"{s.Id:X2}  {s.Name}  • {s.Rooms.Count} rooms  • {s.Rooms.Sum(r => r.Actors.Count)} actors  • {s.SpawnPoints?.Count ?? 0} spawns  • {s.Transitions?.Count ?? 0} transitions  • {s.Paths?.Count ?? 0} paths  • {s.Exits?.Count ?? 0} exits  • {s.Environments?.Count ?? 0} environments  • headers {s.AlternateHeaders?.Count ?? 0}  • water {s.Collision?.Waterboxes?.Count ?? 0}  • flags {flags.Count(f => f.SceneId == s.Id)}" + (s.HasCollision ? $"  • collision ({s.Collision?.Vertices.Count ?? 0}v/{s.Collision?.Triangles.Count ?? 0}t)" : "")).Append("Scene order").ToArray();
-        var builder = new AlertDialog.Builder(this)!; builder.SetTitle($"ROM scenes • {current.Profile.Name}"); builder.SetItems(labels, (_, args) => { if (args.Which == current.Scenes.Count) ShowSceneOrder(); else ShowRomScene(current.Scenes[args.Which]); }); builder.SetNeutralButton("Entrances", (_, _) => ShowEntrances()); builder.SetPositiveButton("Close", (_, _) => { }); builder.Show();
+        if ((romWorkspace?.Document ?? rom) is null) { status.Text = "Open a ROM first."; return; }
+        RefreshSceneBrowser(); SetLeftPanel(true);
     }
 
     private void ShowSceneOrder()
@@ -914,8 +1072,7 @@ public sealed class MainActivity : Activity
 
     private void ShowRomRoom(RomScene scene, RomRoom room)
     {
-        if (room.Geometry is not null || scene.Collision is not null) viewport.ShowNativeRoom(room.Geometry, scene.Collision, nativeGeometryVisible, nativeCollisionVisible);
-        ShowActorOverlay(scene, room);
+        OpenRoomInViewport(scene, room);
         string actors = room.Actors.Count == 0 ? "No actors" : string.Join("\n", room.Actors.Select((a, i) => ActorLabel(a, i)));
         var builder = new AlertDialog.Builder(this)!;
         builder.SetTitle($"Scene {scene.Id:X2} / Room {room.Id:D2}");
@@ -989,6 +1146,7 @@ public sealed class MainActivity : Activity
     private void ToggleActorSelection(RomScene scene, RomRoom room)
     {
         actorSelectionMode = !actorSelectionMode;
+        if (actorSelectionMode) actorOverlayEnabled = true;
         selectedActorKeys.RemoveWhere(key => key.SceneId != scene.Id || key.RoomId != room.Id || key.ActorIndex < 0 || key.ActorIndex >= room.Actors.Count);
         status.Text = actorSelectionMode ? "Actor selection mode enabled. Tap viewport markers to select or deselect them." : $"Actor selection mode closed with {selectedActorKeys.Count} selected actor(s).";
         ShowActorOverlay(scene, room);
@@ -1052,6 +1210,7 @@ public sealed class MainActivity : Activity
     {
         if (actorOverlay is null) return;
         actorOverlay.RemoveAllViews();
+        if (!actorOverlayEnabled && !collisionOverlayEnabled && !collisionTriangleOverlayEnabled && !geometryOverlayEnabled) return;
         if (room.Actors.Count == 0 && !collisionOverlayEnabled && !collisionTriangleOverlayEnabled && !geometryOverlayEnabled) return;
         actorOverlay.Post(() =>
         {
@@ -1512,7 +1671,9 @@ public sealed class MainActivity : Activity
             inspector.Text = $"Room {selected + 1}  •  X {tile.X:0} / Y {tile.Y:0} / Z {tile.Z:0}  •  {tile.QuarterTurns * 90}°\n{preview.TextureReferences.Length} texture reference(s) • material colors active";
         }
         else inspector.Text = "Empty layout • import a desktop tile or add a demo room";
-        viewport.ShowLayout(history.Current, selected);
+        if ((romWorkspace?.Document ?? rom) is null) { viewport.ShowLayout(history.Current, selected); actorOverlay.RemoveAllViews(); }
+        else { var scene = CurrentScene(); var room = CurrentRoom(); if (scene is not null && room is not null) OpenRoomInViewport(scene, room); }
+        RefreshSceneBrowser();
     }
 
     private void Help() => new AlertDialog.Builder(this)!.SetTitle("Archarina64 Android • first port")!

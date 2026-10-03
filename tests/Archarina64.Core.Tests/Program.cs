@@ -43,6 +43,18 @@ Test("Native OoT ROM decoder reads scene rooms actors and collision metadata", (
     Check((short)(patched[actors + 2] << 8 | patched[actors + 3]) == 77 && patched[0xB6FBF0] == 7 && patched[0xB6FBF1] == 8 && (short)(patched[scene + 0xB2] << 8 | patched[scene + 0xB3]) == 321 && (short)(patched[scene + 0xCE] << 8 | patched[scene + 0xCF]) == 40 && (short)(patched[scene + 0xD0] << 8 | patched[scene + 0xD1]) == 50 && (short)(patched[scene + 0xD2] << 8 | patched[scene + 0xD3]) == 60 && patched[scene + 0xF0] == 0x08 && patched[scene + 0xF1] == 0x42 && (short)(patched[scene + 0xFA] << 8 | patched[scene + 0xFB]) == 999 && patched[scene + 0xD8] == 0xAA && patched[scene + 0xD9] == 0xBB && patched[scene + 0xDA] == 0xCC && patched[scene + 0xEC] == 0x43 && patched[scene + 0xED] == 0x21 && (short)(patched[scene + 0x70] << 8 | patched[scene + 0x71]) == 123 && (short)(patched[scene + 0x88] << 8 | patched[scene + 0x89]) == -123 && patched[scene + 0xA0] == 0x11 && patched[scene + 0xA7] == 0x88, "Uncompressed native ROM patch did not write actor, entrance, spawn, path, exit, environment, waterbox, collision triangle and surface data.");
 });
 
+Test("Expanded hack scene table is selected over coincidental ROM pointers", () => {
+    byte[] rom = new byte[0xB75000]; Put32(rom, 0, 0x80371240);
+    int table = 0xB71450; Put32(rom, table, 0x1000); Put32(rom, table + 4, 0x1100); Put32(rom, table + 20, 0x2000); Put32(rom, table + 24, 0x2100);
+    rom[0x1000] = 0x15; rom[0x1008] = 0x04; rom[0x1009] = 0; Put32(rom, 0x100C, 0x02000020); rom[0x1010] = 0x14;
+    var decoded = RomDecoder.Read(rom);
+    Check(decoded.Profile.Id == "oot-expanded-hack" && decoded.Scenes.Count == 2, "The shifted scene table was not selected.");
+    Array.Clear(rom, table, 40);
+    Put32(rom, 0xB73C40, 0x3000); Put32(rom, 0xB73C44, 0x3100);
+    Put32(rom, 0xB73C54, 0x4000); Put32(rom, 0xB73C58, 0x4100);
+    Reject(() => RomDecoder.Read(rom));
+});
+
 Test("Native transition edits preserve room and camera routing", () => {
     var transition = new RomTransition(1, 2, 3, 4, 5, 6, 7, 8, 9, 10);
     var scene = new RomScene(0, "Test", 0, 1, [], false, [], null, [], [transition], [], [], []);

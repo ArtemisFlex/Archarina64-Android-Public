@@ -39,6 +39,8 @@ public static class RomDecoder
     public const int MaxRomBytes = 64 * 1024 * 1024;
     private static readonly RomProfile[] Profiles =
     [
+        // Expanded, decompressed OoT hack builds can relocate the 101-row scene table by 0x10 bytes.
+        new("oot-expanded-hack", "OoT expanded hack", 0x00B71450, 0x00B71C34),
         new("oot-mq-debug", "OoT MQ debug", 0x00BA0BB0, 0x00BA1488, 0x00B9F360, 0x00BA0BB0),
         new("oot-1.0-ntsc", "OoT 1.0 NTSC", 0x00B71440, 0x00B71C28, 0x00B6FBF0, 0x00B71440),
         new("oot-1.1-ntsc", "OoT 1.1 NTSC", 0x00B73C40, 0x00B74428),
@@ -94,15 +96,31 @@ public static class RomDecoder
 
     private static bool LooksLikeTable(byte[] rom, RomProfile profile)
     {
-        int valid = 0;
+        int valid = 0, sceneHeaders = 0;
         for (int i = 0; i < Math.Min(profile.SceneCount, 32); i++)
         {
             uint start = U32(rom, checked((int)profile.SceneTable + i * 20));
             uint end = U32(rom, checked((int)profile.SceneTable + i * 20 + 4));
             if (start == 0 && end == 0) continue;
-            if (start < end && end <= rom.Length) valid++;
+            if (start < 0x1000 || start >= end || end > rom.Length || end - start < 32 || end - start > 4 * 1024 * 1024) continue;
+            valid++;
+            if (LooksLikeSceneHeader(rom, (int)start, (int)end)) sceneHeaders++;
         }
-        return valid >= 2;
+        return valid >= 2 && sceneHeaders >= 1;
+    }
+
+    private static bool LooksLikeSceneHeader(byte[] rom, int start, int end)
+    {
+        if (rom.AsSpan(start, Math.Min(end - start, 4)).SequenceEqual("Yaz0"u8) || rom.AsSpan(start, Math.Min(end - start, 4)).SequenceEqual("MIO0"u8)) return true;
+        int commands = 0;
+        for (int p = start; p + 8 <= Math.Min(end, start + 160); p += 8)
+        {
+            byte command = rom[p];
+            if (command == 0x14) return commands >= 1;
+            if (command > 0x1A) return false;
+            commands++;
+        }
+        return false;
     }
 
     private static IReadOnlyList<RomHeaderCommand> ReadHeaderCommands(byte[] scene) { var commands = new List<RomHeaderCommand>(); for (int p = 0; p + 8 <= scene.Length && p < 8192; p += 8) { if (scene[p] == 0x14) break; commands.Add(new RomHeaderCommand(scene[p], scene[p + 1], U32(scene, p + 4))); } return commands; }
