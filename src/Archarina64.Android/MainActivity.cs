@@ -25,6 +25,7 @@ public sealed class MainActivity : Activity
     private ListView sceneList = null!, nativeRoomList = null!;
     private LinearLayout leftPanel = null!, rightPanel = null!, editorChrome = null!;
     private LinearLayout rightToolContent = null!;
+    private readonly List<Button> leftTabButtons = [], rightTabButtons = [];
     private TextView sceneTitle = null!, roomTitle = null!, documentTitle = null!;
     private Button restoreChrome = null!;
     private int selectedSceneId = -1, selectedRoomId = -1;
@@ -94,8 +95,8 @@ public sealed class MainActivity : Activity
         leftPanel.AddView(leftHeader);
         var leftTabs = new HorizontalScrollView(this) { HorizontalScrollBarEnabled = false };
         var leftTabRow = new LinearLayout(this) { Orientation = Orientation.Horizontal };
-        AddTabButton(leftTabRow, "ROM scenes", () => SetLeftTab("ROM"));
-        AddTabButton(leftTabRow, "Layout", () => SetLeftTab("Layout"));
+        leftTabButtons.Add(AddTabButton(leftTabRow, "ROM scenes", () => SetLeftTab("ROM")));
+        leftTabButtons.Add(AddTabButton(leftTabRow, "Layout", () => SetLeftTab("Layout")));
         leftTabs.AddView(leftTabRow); leftPanel.AddView(leftTabs, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, Dp(44)));
         sceneList = new ListView(this) { ChoiceMode = ChoiceMode.Single };
         sceneList.ItemClick += (_, e) => { var current = romWorkspace?.Document ?? rom; if (current is not null && e.Position < current.Scenes.Count) OpenSceneInViewport(current.Scenes[e.Position]); };
@@ -120,7 +121,7 @@ public sealed class MainActivity : Activity
         var rightTabs = new HorizontalScrollView(this) { HorizontalScrollBarEnabled = false };
         var rightTabRow = new LinearLayout(this) { Orientation = Orientation.Horizontal };
         foreach (string tab in new[] { "General", "Scene", "Room", "Actors", "Collision", "Geometry", "Commands", "Tools" })
-            AddTabButton(rightTabRow, tab, () => SetRightTab(tab));
+            rightTabButtons.Add(AddTabButton(rightTabRow, tab, () => SetRightTab(tab)));
         rightTabs.AddView(rightTabRow); rightPanel.AddView(rightTabs, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, Dp(44)));
         var toolScroll = new ScrollView(this); rightToolContent = new LinearLayout(this) { Orientation = Orientation.Vertical }; toolScroll.AddView(rightToolContent); rightPanel.AddView(toolScroll, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, 0, 1));
         viewportFrame.AddView(rightPanel, new FrameLayout.LayoutParams(panelWidth, ViewGroup.LayoutParams.MatchParent, GravityFlags.Right));
@@ -182,11 +183,29 @@ public sealed class MainActivity : Activity
     private void AddPanelButton(LinearLayout panel, string label, Action action)
         => panel.AddView(CompactButton(label, action), new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, Dp(48)));
 
-    private void AddTabButton(LinearLayout row, string label, Action action)
+    private Button AddTabButton(LinearLayout row, string label, Action action)
     {
         var button = CompactButton(label, action);
         button.SetTextSize(global::Android.Util.ComplexUnitType.Sp, 11);
+        button.Tag = label;
         row.AddView(button, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, Dp(44)));
+        return button;
+    }
+
+    private void RefreshTabStyles()
+    {
+        foreach (var button in leftTabButtons)
+        {
+            bool active = string.Equals(button.Tag?.ToString(), leftTab == "ROM" ? "ROM scenes" : "Layout", StringComparison.Ordinal);
+            button.SetBackgroundColor(active ? Color.Rgb(88, 222, 189) : Color.Rgb(76, 84, 96));
+            button.SetTextColor(active ? Color.Rgb(14, 19, 28) : Color.White);
+        }
+        foreach (var button in rightTabButtons)
+        {
+            bool active = string.Equals(button.Tag?.ToString(), rightTab, StringComparison.Ordinal);
+            button.SetBackgroundColor(active ? Color.Rgb(88, 222, 189) : Color.Rgb(76, 84, 96));
+            button.SetTextColor(active ? Color.Rgb(14, 19, 28) : Color.White);
+        }
     }
 
     private void SetLeftTab(string tab)
@@ -198,12 +217,14 @@ public sealed class MainActivity : Activity
         nativeRoomList.Visibility = romVisible ? ViewStates.Visible : ViewStates.Gone;
         rooms.Visibility = tab == "Layout" ? ViewStates.Visible : ViewStates.Gone;
         sceneTitle.Text = romVisible ? "Scenes & rooms" : "Mobile layout";
+        RefreshTabStyles();
         RefreshSceneBrowser();
     }
 
     private void SetRightTab(string tab)
     {
         rightTab = tab;
+        RefreshTabStyles();
         rightToolContent.RemoveAllViews();
         var tabTitle = new TextView(this) { Text = tab.ToUpperInvariant(), TextSize = 12, Gravity = GravityFlags.CenterVertical, LayoutParameters = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, Dp(34)) };
         tabTitle.SetTextColor(Color.Rgb(88, 222, 189)); tabTitle.SetTypeface(global::Android.Graphics.Typeface.Default, global::Android.Graphics.TypefaceStyle.Bold); rightToolContent.AddView(tabTitle);
