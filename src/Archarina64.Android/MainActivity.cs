@@ -29,6 +29,7 @@ public sealed class MainActivity : Activity
     private TextView sceneTitle = null!, roomTitle = null!, documentTitle = null!;
     private Button restoreChrome = null!;
     private int selectedSceneId = -1, selectedRoomId = -1;
+    private int inlineActorIndex = -1;
     private bool leftPanelVisible = true, rightPanelVisible;
     private string leftTab = "ROM", rightTab = "General";
     private LinearLayout pageRoot = null!;
@@ -275,6 +276,7 @@ public sealed class MainActivity : Activity
             AddPanelButton(rightToolContent, "Group transform", () => WithRoom(ShowActorGroupTransform));
             AddPanelButton(rightToolContent, "Spawns", () => WithScene(ShowRomSpawns));
             AddPanelButton(rightToolContent, "Transitions", () => WithScene(ShowRomTransitions));
+            AddInlineActorInspector(CurrentScene(), CurrentRoom());
         }
         else if (tab == "Collision")
         {
@@ -312,6 +314,72 @@ public sealed class MainActivity : Activity
             AddPanelButton(rightToolContent, "Save mobile layout", () => { LayoutStorage.SaveAtomic(SavePath, history.Current); status.Text = "Layout saved on device."; });
             AddPanelButton(rightToolContent, "Help", Help);
         }
+    }
+
+    private void AddInlineActorInspector(RomScene? scene, RomRoom? room)
+    {
+        var heading = new TextView(this) { Text = "INLINE ACTOR INSPECTOR", TextSize = 12 };
+        heading.SetTextColor(Color.Rgb(88, 222, 189)); heading.SetTypeface(global::Android.Graphics.Typeface.Default, global::Android.Graphics.TypefaceStyle.Bold); heading.SetPadding(Dp(4), Dp(12), Dp(4), Dp(4));
+        rightToolContent.AddView(heading);
+        if (scene is null || room is null)
+        {
+            var empty = new TextView(this) { Text = "Select a ROM scene and room to edit actors here.", TextSize = 12 };
+            empty.SetTextColor(Color.Rgb(191, 203, 218)); empty.SetPadding(Dp(4), Dp(4), Dp(4), Dp(8)); rightToolContent.AddView(empty);
+            return;
+        }
+        for (int index = 0; index < room.Actors.Count; index++)
+        {
+            int actorIndex = index;
+            var row = CompactButton(ActorLabel(room.Actors[index], index), () => { inlineActorIndex = actorIndex; SetRightTab("Actors"); });
+            row.SetTextSize(global::Android.Util.ComplexUnitType.Sp, 11); row.Gravity = GravityFlags.Left | GravityFlags.CenterVertical; row.SetPadding(Dp(8), 0, Dp(8), 0);
+            row.SetBackgroundColor(actorIndex == inlineActorIndex ? Color.Rgb(208, 126, 45) : Color.Rgb(55, 68, 84));
+            rightToolContent.AddView(row, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, Dp(54)));
+        }
+        if (room.Actors.Count == 0)
+        {
+            var empty = new TextView(this) { Text = "No actors in this room.", TextSize = 12 };
+            empty.SetTextColor(Color.Rgb(191, 203, 218)); empty.SetPadding(Dp(4), Dp(4), Dp(4), Dp(8)); rightToolContent.AddView(empty);
+            return;
+        }
+        inlineActorIndex = Math.Clamp(inlineActorIndex, 0, room.Actors.Count - 1);
+        var actor = room.Actors[inlineActorIndex];
+        var panel = new LinearLayout(this) { Orientation = Orientation.Vertical };
+        panel.SetPadding(Dp(4), Dp(8), Dp(4), Dp(4));
+        var number = NumberEditor(panel, "Actor ID", $"0x{actor.Number:X4}");
+        var x = NumberEditor(panel, "X", actor.X.ToString(CultureInfo.InvariantCulture));
+        var y = NumberEditor(panel, "Y", actor.Y.ToString(CultureInfo.InvariantCulture));
+        var z = NumberEditor(panel, "Z", actor.Z.ToString(CultureInfo.InvariantCulture));
+        var rx = NumberEditor(panel, "X rotation", actor.RotationX.ToString(CultureInfo.InvariantCulture));
+        var ry = NumberEditor(panel, "Y rotation", actor.RotationY.ToString(CultureInfo.InvariantCulture));
+        var rz = NumberEditor(panel, "Z rotation", actor.RotationZ.ToString(CultureInfo.InvariantCulture));
+        var variable = NumberEditor(panel, "Variable", $"0x{actor.Variable:X4}");
+        AddActorGizmo(panel, x, y, z, rx, ry, rz);
+        rightToolContent.AddView(panel, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
+        AddPanelButton(rightToolContent, "Apply actor", () =>
+        {
+            try
+            {
+                if (romWorkspace is null) throw new InvalidOperationException("Open a ROM before staging native actor edits.");
+                var updated = new RomActor((ushort)ParseInt(number), (short)ParseInt(x), (short)ParseInt(y), (short)ParseInt(z), (short)ParseInt(rx), (short)ParseInt(ry), (short)ParseInt(rz), (ushort)ParseInt(variable));
+                romWorkspace.EditRoomActor(scene.Id, room.Id, inlineActorIndex, updated);
+                status.Text = $"Actor {inlineActorIndex:D2} edit staged in the ROM workspace.";
+                var current = romWorkspace.Document.Scenes.First(item => item.Id == scene.Id);
+                OpenRoomInViewport(current, current.Rooms[room.Id]); SetRightTab("Actors");
+            }
+            catch (Exception error) { ShowError(error); }
+        });
+        AddPanelButton(rightToolContent, "Delete actor", () =>
+        {
+            try
+            {
+                if (romWorkspace is null) throw new InvalidOperationException("Open a ROM before staging native actor edits.");
+                romWorkspace.EditRoomActors(scene.Id, room.Id, room.Actors.Where((_, index) => index != inlineActorIndex).ToArray());
+                inlineActorIndex = Math.Max(0, inlineActorIndex - 1); status.Text = "Native actor deletion staged in the ROM workspace.";
+                var current = romWorkspace.Document.Scenes.First(item => item.Id == scene.Id);
+                OpenRoomInViewport(current, current.Rooms[room.Id]); SetRightTab("Actors");
+            }
+            catch (Exception error) { ShowError(error); }
+        });
     }
 
     private void SetLeftPanel(bool visible)
