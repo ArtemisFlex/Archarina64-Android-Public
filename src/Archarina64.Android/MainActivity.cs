@@ -33,7 +33,7 @@ public sealed class MainActivity : Activity
     private string inlineGeometryKind = "vertex";
     private int inlineGeometryIndex = 0, inlineCommandIndex = 0;
     private string inlineCollisionKind = "vertex";
-    private int inlineCollisionIndex = 0;
+    private int inlineCollisionIndex = 0, inlineCameraPathIndex = 0;
     private string inlineSceneKind = "settings";
     private int inlineSceneIndex = 0;
     private string inlineRoomKind = "settings";
@@ -576,16 +576,33 @@ public sealed class MainActivity : Activity
         AddToolbar(rightToolContent,
             ("Vertices", () => { inlineCollisionKind = "vertex"; inlineCollisionIndex = 0; SetRightTab("Collision"); }),
             ("Triangles", () => { inlineCollisionKind = "triangle"; inlineCollisionIndex = 0; SetRightTab("Collision"); }),
-            ("Surfaces", () => { inlineCollisionKind = "surface"; inlineCollisionIndex = 0; SetRightTab("Collision"); }));
-        int total = inlineCollisionKind switch { "triangle" => collision.Triangles.Count, "surface" => collision.SurfaceTypes.Count, _ => collision.Vertices.Count };
+            ("Surfaces", () => { inlineCollisionKind = "surface"; inlineCollisionIndex = 0; SetRightTab("Collision"); }),
+            ("Cameras", () => { inlineCollisionKind = "camera"; inlineCollisionIndex = 0; SetRightTab("Collision"); }),
+            ("Camera paths", () => { inlineCollisionKind = "cameraPath"; inlineCameraPathIndex = 0; SetRightTab("Collision"); }));
+        int total = inlineCollisionKind switch { "triangle" => collision.Triangles.Count, "surface" => collision.SurfaceTypes.Count, "camera" => collision.Cameras?.Count ?? 0, "cameraPath" => collision.Cameras is { Count: > 0 } && collision.Cameras[Math.Clamp(inlineCollisionIndex, 0, collision.Cameras.Count - 1)].PathPoints is { } path ? path.Count : 0, _ => collision.Vertices.Count };
         if (total == 0) { rightToolContent.AddView(new TextView(this) { Text = "No collision records decoded for this scene." }); return; }
         inlineCollisionIndex = Math.Clamp(inlineCollisionIndex, 0, total - 1);
-        var indexEditor = NumberEditor(rightToolContent, inlineCollisionKind + " index", inlineCollisionIndex.ToString(CultureInfo.InvariantCulture));
+        if (inlineCollisionKind == "cameraPath") inlineCollisionIndex = Math.Clamp(inlineCollisionIndex, 0, (collision.Cameras?.Count ?? 1) - 1);
+        var indexEditor = NumberEditor(rightToolContent, inlineCollisionKind == "cameraPath" ? "Path point index" : inlineCollisionKind + " index", (inlineCollisionKind == "cameraPath" ? inlineCameraPathIndex : inlineCollisionIndex).ToString(CultureInfo.InvariantCulture));
         AddToolbar(rightToolContent,
-            ("Previous", () => { inlineCollisionIndex = Math.Max(0, inlineCollisionIndex - 1); SetRightTab("Collision"); }),
-            ("Next", () => { inlineCollisionIndex = Math.Min(total - 1, inlineCollisionIndex + 1); SetRightTab("Collision"); }),
-            ("Load index", () => { try { inlineCollisionIndex = Math.Clamp(ParseInt(indexEditor), 0, total - 1); SetRightTab("Collision"); } catch (Exception error) { ShowError(error); } }));
-        if (inlineCollisionKind == "vertex")
+            ("Previous", () => { if (inlineCollisionKind == "cameraPath") inlineCameraPathIndex = Math.Max(0, inlineCameraPathIndex - 1); else inlineCollisionIndex = Math.Max(0, inlineCollisionIndex - 1); SetRightTab("Collision"); }),
+            ("Next", () => { if (inlineCollisionKind == "cameraPath") inlineCameraPathIndex = Math.Min(total - 1, inlineCameraPathIndex + 1); else inlineCollisionIndex = Math.Min(total - 1, inlineCollisionIndex + 1); SetRightTab("Collision"); }),
+            ("Load index", () => { try { if (inlineCollisionKind == "cameraPath") inlineCameraPathIndex = Math.Clamp(ParseInt(indexEditor), 0, total - 1); else inlineCollisionIndex = Math.Clamp(ParseInt(indexEditor), 0, total - 1); SetRightTab("Collision"); } catch (Exception error) { ShowError(error); } }));
+        if (inlineCollisionKind == "camera")
+        {
+            var value = collision.Cameras![inlineCollisionIndex]; var fields = new LinearLayout(this) { Orientation = Orientation.Vertical }; fields.SetPadding(Dp(4), Dp(4), Dp(4), Dp(4));
+            var type = NumberEditor(fields, "Type", value.Type.ToString(CultureInfo.InvariantCulture)); var count = NumberEditor(fields, "Page/path point count", value.DataCount.ToString(CultureInfo.InvariantCulture)); var x = NumberEditor(fields, "X", value.X.ToString(CultureInfo.InvariantCulture)); var y = NumberEditor(fields, "Y", value.Y.ToString(CultureInfo.InvariantCulture)); var z = NumberEditor(fields, "Z", value.Z.ToString(CultureInfo.InvariantCulture)); var rx = NumberEditor(fields, "X rotation", value.RotationX.ToString(CultureInfo.InvariantCulture)); var ry = NumberEditor(fields, "Y rotation", value.RotationY.ToString(CultureInfo.InvariantCulture)); var rz = NumberEditor(fields, "Z rotation", value.RotationZ.ToString(CultureInfo.InvariantCulture)); var fov = NumberEditor(fields, "FOV", value.Fov.ToString(CultureInfo.InvariantCulture)); var u1 = NumberEditor(fields, "Unknown 1", value.Unknown1.ToString(CultureInfo.InvariantCulture)); var u2 = NumberEditor(fields, "Unknown 2", value.Unknown2.ToString(CultureInfo.InvariantCulture));
+            rightToolContent.AddView(fields, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
+            AddPanelButton(rightToolContent, "Apply camera", () => { try { if (romWorkspace is null) throw new InvalidOperationException("Open a ROM before staging camera edits."); romWorkspace.EditCamera(scene.Id, inlineCollisionIndex, new RomCamera((byte)ParseInt(type), (short)ParseInt(x), (short)ParseInt(y), (short)ParseInt(z), (short)ParseInt(rx), (short)ParseInt(ry), (short)ParseInt(rz), (short)ParseInt(fov), (ushort)ParseInt(u1), (ushort)ParseInt(u2), (short)ParseInt(count), value.PathPoints)); status.Text = $"Camera {inlineCollisionIndex:D2} edit staged."; RefreshInlineCollision(scene.Id); } catch (Exception error) { ShowError(error); } });
+        }
+        else if (inlineCollisionKind == "cameraPath")
+        {
+            var camera = collision.Cameras![inlineCollisionIndex]; if (camera.PathPoints is null || camera.PathPoints.Count == 0) { rightToolContent.AddView(new TextView(this) { Text = "The selected camera has no decoded path/page points." }); return; }
+            inlineCameraPathIndex = Math.Clamp(inlineCameraPathIndex, 0, camera.PathPoints.Count - 1); var value = camera.PathPoints[inlineCameraPathIndex]; var fields = new LinearLayout(this) { Orientation = Orientation.Vertical }; fields.SetPadding(Dp(4), Dp(4), Dp(4), Dp(4)); var x = NumberEditor(fields, "X", value.X.ToString(CultureInfo.InvariantCulture)); var y = NumberEditor(fields, "Y", value.Y.ToString(CultureInfo.InvariantCulture)); var z = NumberEditor(fields, "Z", value.Z.ToString(CultureInfo.InvariantCulture));
+            rightToolContent.AddView(new TextView(this) { Text = $"Camera {inlineCollisionIndex:D2} path/page point {inlineCameraPathIndex:D2}", TextSize = 12 }); rightToolContent.AddView(fields, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
+            AddPanelButton(rightToolContent, "Apply camera path point", () => { try { if (romWorkspace is null) throw new InvalidOperationException("Open a ROM before staging camera edits."); var points = camera.PathPoints.ToArray(); points[inlineCameraPathIndex] = new RomCameraPathPoint((short)ParseInt(x), (short)ParseInt(y), (short)ParseInt(z)); romWorkspace.EditCamera(scene.Id, inlineCollisionIndex, camera with { DataCount = (short)points.Length, PathPoints = points }); status.Text = $"Camera {inlineCollisionIndex:D2} path point {inlineCameraPathIndex:D2} edit staged."; RefreshInlineCollision(scene.Id); } catch (Exception error) { ShowError(error); } });
+        }
+        else if (inlineCollisionKind == "vertex")
         {
             var vertex = collision.Vertices[inlineCollisionIndex]; var fields = new LinearLayout(this) { Orientation = Orientation.Vertical }; fields.SetPadding(Dp(4), Dp(4), Dp(4), Dp(4));
             var x = NumberEditor(fields, "X", vertex.X.ToString(CultureInfo.InvariantCulture)); var y = NumberEditor(fields, "Y", vertex.Y.ToString(CultureInfo.InvariantCulture)); var z = NumberEditor(fields, "Z", vertex.Z.ToString(CultureInfo.InvariantCulture));
