@@ -30,6 +30,8 @@ public sealed class MainActivity : Activity
     private Button restoreChrome = null!;
     private int selectedSceneId = -1, selectedRoomId = -1;
     private int inlineActorIndex = -1;
+    private string inlineGeometryKind = "vertex";
+    private int inlineGeometryIndex = 0, inlineCommandIndex = 0;
     private bool leftPanelVisible = true, rightPanelVisible;
     private string leftTab = "ROM", rightTab = "General";
     private LinearLayout pageRoot = null!;
@@ -296,12 +298,14 @@ public sealed class MainActivity : Activity
             AddPanelButton(rightToolContent, "Import custom geometry", () => WithRoom(ImportNativeGeometry));
             AddPanelButton(rightToolContent, "Export reusable tile", () => WithRoom(AddRomRoomTile));
             AddPanelButton(rightToolContent, "Toggle geometry picking", () => WithRoom(ToggleGeometryOverlay));
+            AddInlineGeometryInspector(CurrentScene(), CurrentRoom());
         }
         else if (tab == "Commands")
         {
             AddPanelButton(rightToolContent, "Scene commands", () => WithScene(ShowRomSceneCommands));
             AddPanelButton(rightToolContent, "Alternate-header commands", () => WithScene(ShowRomAlternateHeaders));
             AddPanelButton(rightToolContent, "Display-list commands", () => WithRoom(ShowNativeDisplayListSources));
+            AddInlineCommandInspector(CurrentScene(), CurrentRoom());
         }
         else
         {
@@ -378,6 +382,82 @@ public sealed class MainActivity : Activity
                 var current = romWorkspace.Document.Scenes.First(item => item.Id == scene.Id);
                 OpenRoomInViewport(current, current.Rooms[room.Id]); SetRightTab("Actors");
             }
+            catch (Exception error) { ShowError(error); }
+        });
+    }
+
+    private void AddInlineGeometryInspector(RomScene? scene, RomRoom? room)
+    {
+        var heading = new TextView(this) { Text = "INLINE GEOMETRY INSPECTOR", TextSize = 12 };
+        heading.SetTextColor(Color.Rgb(88, 222, 189)); heading.SetTypeface(global::Android.Graphics.Typeface.Default, global::Android.Graphics.TypefaceStyle.Bold); heading.SetPadding(Dp(4), Dp(12), Dp(4), Dp(4));
+        rightToolContent.AddView(heading);
+        var geometry = room?.Geometry;
+        if (scene is null || room is null || geometry is null)
+        {
+            var empty = new TextView(this) { Text = "Select a decoded room to edit geometry here.", TextSize = 12 };
+            empty.SetTextColor(Color.Rgb(191, 203, 218)); empty.SetPadding(Dp(4), Dp(4), Dp(4), Dp(8)); rightToolContent.AddView(empty);
+            return;
+        }
+        AddToolbar(rightToolContent,
+            ("Vertices", () => { inlineGeometryKind = "vertex"; inlineGeometryIndex = 0; SetRightTab("Geometry"); }),
+            ("Triangles", () => { inlineGeometryKind = "triangle"; inlineGeometryIndex = 0; SetRightTab("Geometry"); }));
+        int total = inlineGeometryKind == "vertex" ? geometry.Vertices.Count : geometry.Triangles.Count;
+        if (total == 0) { rightToolContent.AddView(new TextView(this) { Text = "No records decoded for this room." }); return; }
+        inlineGeometryIndex = Math.Clamp(inlineGeometryIndex, 0, total - 1);
+        var indexEditor = NumberEditor(rightToolContent, inlineGeometryKind == "vertex" ? "Vertex index" : "Triangle index", inlineGeometryIndex.ToString(CultureInfo.InvariantCulture));
+        AddToolbar(rightToolContent,
+            ("Previous", () => { inlineGeometryIndex = Math.Max(0, inlineGeometryIndex - 1); SetRightTab("Geometry"); }),
+            ("Next", () => { inlineGeometryIndex = Math.Min(total - 1, inlineGeometryIndex + 1); SetRightTab("Geometry"); }),
+            ("Load index", () => { try { inlineGeometryIndex = Math.Clamp(ParseInt(indexEditor), 0, total - 1); SetRightTab("Geometry"); } catch (Exception error) { ShowError(error); } }));
+        if (inlineGeometryKind == "vertex")
+        {
+            var vertex = geometry.Vertices[inlineGeometryIndex]; var fields = new LinearLayout(this) { Orientation = Orientation.Vertical }; fields.SetPadding(Dp(4), Dp(4), Dp(4), Dp(4));
+            var x = NumberEditor(fields, "X", vertex.X.ToString(CultureInfo.InvariantCulture)); var y = NumberEditor(fields, "Y", vertex.Y.ToString(CultureInfo.InvariantCulture)); var z = NumberEditor(fields, "Z", vertex.Z.ToString(CultureInfo.InvariantCulture));
+            var s = NumberEditor(fields, "S", vertex.S.ToString(CultureInfo.InvariantCulture)); var t = NumberEditor(fields, "T", vertex.T.ToString(CultureInfo.InvariantCulture)); var r = NumberEditor(fields, "R", vertex.R.ToString(CultureInfo.InvariantCulture)); var g = NumberEditor(fields, "G", vertex.G.ToString(CultureInfo.InvariantCulture)); var b = NumberEditor(fields, "B", vertex.B.ToString(CultureInfo.InvariantCulture)); var a = NumberEditor(fields, "A", vertex.A.ToString(CultureInfo.InvariantCulture));
+            rightToolContent.AddView(fields, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
+            AddPanelButton(rightToolContent, "Apply vertex", () =>
+            {
+                try { if (romWorkspace is null) throw new InvalidOperationException("Open a ROM before staging native geometry edits."); romWorkspace.EditGeometryVertex(scene.Id, room.Id, inlineGeometryIndex, new RomGeometryVertex((short)ParseInt(x), (short)ParseInt(y), (short)ParseInt(z), (short)ParseInt(s), (short)ParseInt(t), (byte)ParseInt(r), (byte)ParseInt(g), (byte)ParseInt(b), (byte)ParseInt(a))); status.Text = $"Geometry vertex {inlineGeometryIndex:D3} edit staged."; var current = romWorkspace.Document.Scenes.First(item => item.Id == scene.Id); OpenRoomInViewport(current, current.Rooms[room.Id]); SetRightTab("Geometry"); }
+                catch (Exception error) { ShowError(error); }
+            });
+        }
+        else
+        {
+            var triangle = geometry.Triangles[inlineGeometryIndex]; var fields = new LinearLayout(this) { Orientation = Orientation.Vertical }; fields.SetPadding(Dp(4), Dp(4), Dp(4), Dp(4));
+            var a = NumberEditor(fields, "A", triangle.A.ToString(CultureInfo.InvariantCulture)); var b = NumberEditor(fields, "B", triangle.B.ToString(CultureInfo.InvariantCulture)); var c = NumberEditor(fields, "C", triangle.C.ToString(CultureInfo.InvariantCulture));
+            rightToolContent.AddView(fields, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
+            AddPanelButton(rightToolContent, "Apply triangle", () =>
+            {
+                try { if (romWorkspace is null) throw new InvalidOperationException("Open a ROM before staging native geometry edits."); romWorkspace.EditGeometryTriangle(scene.Id, room.Id, inlineGeometryIndex, new RomGeometryTriangle(ParseInt(a), ParseInt(b), ParseInt(c))); status.Text = $"Geometry triangle {inlineGeometryIndex:D3} edit staged."; var current = romWorkspace.Document.Scenes.First(item => item.Id == scene.Id); OpenRoomInViewport(current, current.Rooms[room.Id]); SetRightTab("Geometry"); }
+                catch (Exception error) { ShowError(error); }
+            });
+        }
+    }
+
+    private void AddInlineCommandInspector(RomScene? scene, RomRoom? room)
+    {
+        var heading = new TextView(this) { Text = "INLINE DISPLAY-LIST COMMAND INSPECTOR", TextSize = 12 };
+        heading.SetTextColor(Color.Rgb(88, 222, 189)); heading.SetTypeface(global::Android.Graphics.Typeface.Default, global::Android.Graphics.TypefaceStyle.Bold); heading.SetPadding(Dp(4), Dp(12), Dp(4), Dp(4));
+        rightToolContent.AddView(heading);
+        var commands = room?.Geometry?.DisplayListCommands;
+        if (scene is null || room is null || commands is not { Count: > 0 })
+        {
+            var empty = new TextView(this) { Text = "Select a room with decoded display-list commands to edit raw command words here.", TextSize = 12 };
+            empty.SetTextColor(Color.Rgb(191, 203, 218)); empty.SetPadding(Dp(4), Dp(4), Dp(4), Dp(8)); rightToolContent.AddView(empty);
+            return;
+        }
+        inlineCommandIndex = Math.Clamp(inlineCommandIndex, 0, commands.Count - 1); var command = commands[inlineCommandIndex];
+        var indexEditor = NumberEditor(rightToolContent, "Command index", inlineCommandIndex.ToString(CultureInfo.InvariantCulture));
+        AddToolbar(rightToolContent,
+            ("Previous", () => { inlineCommandIndex = Math.Max(0, inlineCommandIndex - 1); SetRightTab("Commands"); }),
+            ("Next", () => { inlineCommandIndex = Math.Min(commands.Count - 1, inlineCommandIndex + 1); SetRightTab("Commands"); }),
+            ("Load index", () => { try { inlineCommandIndex = Math.Clamp(ParseInt(indexEditor), 0, commands.Count - 1); SetRightTab("Commands"); } catch (Exception error) { ShowError(error); } }));
+        var label = new TextView(this) { Text = $"Opcode 0x{command.Operation:X2} • room offset 0x{command.SourceOffset:X6}", TextSize = 12 };
+        label.SetTextColor(Color.Rgb(191, 203, 218)); label.SetPadding(Dp(4), Dp(4), Dp(4), Dp(4)); rightToolContent.AddView(label);
+        var word0 = NumberEditor(rightToolContent, "Word 0 (hex)", $"0x{command.Word0:X8}"); var word1 = NumberEditor(rightToolContent, "Word 1 (hex)", $"0x{command.Word1:X8}");
+        AddPanelButton(rightToolContent, "Apply command", () =>
+        {
+            try { if (romWorkspace is null) throw new InvalidOperationException("Open a ROM before staging display-list edits."); romWorkspace.EditGeometryCommand(scene.Id, room.Id, command.SourceOffset, checked((uint)ParseUInt64(word0)), checked((uint)ParseUInt64(word1))); status.Text = $"Display-list command {inlineCommandIndex:D3} edit staged."; var current = romWorkspace.Document.Scenes.First(item => item.Id == scene.Id); OpenRoomInViewport(current, current.Rooms[room.Id]); SetRightTab("Commands"); }
             catch (Exception error) { ShowError(error); }
         });
     }
